@@ -41,7 +41,7 @@ runs:
         "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/validate-registry.sh"
 
     - name: Log in to the registry
-      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
       with:
         registry: ${{ inputs.registry }}
         username: ${{ inputs.username != '' && inputs.username || github.actor }}
