@@ -10,8 +10,13 @@ decision, and one identity for every repository to verify against.
 - **Composite actions** are called at the step level, for building something
   the workflows do not cover.
 
-Pin to a commit SHA, or track the floating `@v1` tag. Current release:
-**[v1.1.0](https://github.com/thingzio/actions/releases/latest)**.
+Pin to a commit SHA, or track the floating `@v1` tag. See the
+[latest release](https://github.com/thingzio/actions/releases/latest) for the
+current version.
+
+<!-- Deliberately not naming the version here. It was hand-maintained and went
+     stale across four releases without anyone noticing, because nothing checks
+     it. A link that cannot be wrong beats a number that has been. -->
 
 ---
 

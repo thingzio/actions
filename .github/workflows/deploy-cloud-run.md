@@ -44,6 +44,7 @@ jobs:
 | `expected_registry` | `ghcr.io` | Registry the images must have been published to. |
 | `remote_repository` | `gh` | Artifact Registry remote repository fronting that registry. |
 | `scheduler_job` | `''` | Cloud Scheduler job to pause during the rollout. Empty disables it. |
+| `resume_on_failure` | `true` | Resume the scheduler even when the rollout failed. `false` is fail-closed. |
 | `timeout_minutes` | `20` | Job timeout. |
 
 ## `targets`
@@ -107,6 +108,24 @@ rollout:
 leaves the previous revision serving, which is visible and safe, but a scheduler
 left paused stops scheduled work that nothing is watching — and the symptom
 appears hours later as "why did nothing run overnight".
+
+### Fail-closed
+
+Set `resume_on_failure: false` where a partially updated set must not be
+exercised until an operator has looked at it:
+
+```yaml
+      scheduler_job: my-scheduled-job
+      resume_on_failure: false
+```
+
+A successful rollout still resumes. A failed one deliberately leaves the job
+paused.
+
+Choose this deliberately. It trades a silent stop for a guarantee, and the
+silent stop is the one nobody gets paged for. It is worth it when a partial
+rollout is genuinely unsafe to exercise; it is not worth it when the deploy
+order already makes every prefix safe.
 
 Resume is therefore deliberately forgiving. It may be reached when the pause
 never happened, when authentication failed, or when the deploy died halfway;

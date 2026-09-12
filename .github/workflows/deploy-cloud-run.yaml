@@ -96,6 +96,21 @@ on:
         required: false
         type: string
         default: ''
+      resume_on_failure:
+        description: >-
+          Resume the scheduler even when the rollout failed.
+
+          True keeps scheduled work running: a failed deploy leaves the
+          previous revision serving, and a scheduler left paused stops work
+          nothing is watching.
+
+          False is fail-closed, for a service where a partially updated set
+          must not be exercised until an operator has looked at it. Choose it
+          deliberately -- it trades a silent stop for a guarantee, and the
+          silent stop is the one nobody gets paged for.
+        required: false
+        type: boolean
+        default: true
       timeout_minutes:
         description: Job timeout
         required: false
@@ -176,12 +191,17 @@ jobs:
           PLAN: ${{ steps.plan.outputs.plan }}
         run: .builder/scripts/actions/cloud-run-deploy.sh
 
-      # always(), so a failed rollout does not leave delivery paused. This is
-      # the difference between a failed deploy and a silent outage: the
-      # previous revision keeps serving either way, but a paused scheduler
-      # stops work nothing else will notice has stopped.
+      # Runs under always() so a failed rollout does not leave the scheduler
+      # paused -- the previous revision keeps serving either way, but a paused
+      # scheduler stops work nothing else will notice has stopped.
+      #
+      # Unless the caller asked for fail-closed, in which case a failed rollout
+      # deliberately leaves it paused for an operator to inspect. Success still
+      # resumes in both modes.
       - name: Resume the scheduler
-        if: always() && inputs.scheduler_job != ''
+        if: >-
+          always() && inputs.scheduler_job != ''
+          && (inputs.resume_on_failure || steps.deploy.outcome == 'success')
         env:
           SCHEDULER_JOB: ${{ inputs.scheduler_job }}
         run: .builder/scripts/actions/scheduler-state.sh resume
