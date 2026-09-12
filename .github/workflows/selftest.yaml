@@ -131,6 +131,21 @@ jobs:
     with:
       working_directory: testdata/go-app
 
+  # Exercises release-go without cutting a release: a snapshot build that signs,
+  # attests and publishes nothing. It proves the build job's half -- tool
+  # installation, version resolution, goreleaser invocation and the checksum
+  # requirement. The signing and attestation half is proven by a real release,
+  # which is the only place an OIDC identity exists.
+  release-go:
+    name: release-go
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-go.yaml
+    with:
+      working_directory: testdata/go-app
+      go_version_file: go.mod
+      dry_run: true
+
   verify:
     # Named from matrix.name alone, deliberately. A matrix job whose `name` does
     # not reference the matrix gets the whole matrix appended to its check name

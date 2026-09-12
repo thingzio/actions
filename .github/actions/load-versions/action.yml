@@ -18,6 +18,9 @@ outputs:
   syft:
     description: syft version, e.g. v1.51.1
     value: ${{ steps.versions.outputs.syft }}
+  goreleaser:
+    description: goreleaser version, e.g. v2.18.1
+    value: ${{ steps.versions.outputs.goreleaser }}
   cosign:
     description: >-
       cosign version. Pinned >= v3.1.0 so DSSE attestations are logged to Rekor

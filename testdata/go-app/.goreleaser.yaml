@@ -1,0 +1,41 @@
+# Fixture config for the release-go selftest.
+#
+# Deliberately shaped the way a real caller must be: a checksum block, because
+# it is the attestation subject, and NO signs block, because signing happens in
+# the reusable workflow's isolated attest job where the caller cannot reach the
+# key.
+version: 2
+
+project_name: go-app
+
+builds:
+  - id: go-app
+    main: .
+    binary: go-app
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: go-app
+    ids: [go-app]
+    formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  draft: true
+  prerelease: auto
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+changelog:
+  use: github-native

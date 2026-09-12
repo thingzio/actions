@@ -192,3 +192,28 @@ test_installs_the_pinned_actionlint_and_verifies_its_checksum() {
   fi
   rm -rf "${dir}"
 }
+
+# goreleaser uses the capitalized "Linux_x86_64" archive vocabulary rather than
+# the lowercase names syft and actionlint publish, so the asset name is the
+# thing most likely to be wrong. Reaching the network is the only way to know
+# the pinned version, the asset name and the published checksum agree.
+test_installs_the_pinned_goreleaser_and_verifies_its_checksum() {
+  local dir
+  if [ -n "${THINGZ_SKIP_NETWORK_TESTS-}" ]; then
+    return 0
+  fi
+  dir="$(fixture_dir)"
+  run "${INSTALL_TOOL_SH}" goreleaser "$("${REPO_ROOT}/scripts/versions.sh" tools.goreleaser)" "${dir}"
+  assert_ok
+  if [ ! -x "${dir}/goreleaser" ]; then
+    printf 'goreleaser was not installed into %s\n' "${dir}" >&2
+    rm -rf "${dir}"
+    return 1
+  fi
+  rm -rf "${dir}"
+}
+
+test_install_tool_rejects_an_unknown_tool() {
+  run "${INSTALL_TOOL_SH}" notatool v1.0.0 "$(fixture_dir)"
+  assert_failed
+}
