@@ -113,7 +113,8 @@ Worth reading once; it is also the bar a new workflow has to meet.
   exercises every workflow against real fixtures on every pull request and
   verifies the result, including the commands published for consumers. The one
   exception is `deploy-cloud-run`, which would need a disposable GCP project;
-  its decision logic is unit tested with gcloud stubbed.
+  its decision logic is unit tested with gcloud stubbed, and Cloud Run's own
+  revision model means a service that fails to start never takes traffic.
 
 ## Local development
 
