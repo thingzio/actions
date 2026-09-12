@@ -44,9 +44,21 @@ Protects the default branch.
 | `deletion`, `non_fast_forward` | The branch other repositories pin against cannot be rewritten. |
 | Empty `bypass_actors` | Including for the maintainer. A bypass that exists is a bypass that gets used at 2am. |
 
-Status check contexts are the **job names** from `ci.yaml` and `selftest.yaml`.
-Renaming a job silently disables its gate — a job that never reports is not a
-job that failed — so rename in both places or not at all.
+Status check contexts are the **job names** from `ci.yaml`, `selftest.yaml` and
+`codeql.yaml`. Renaming a job silently disables its gate — a job that never
+reports is not a job that failed — so rename in both places or not at all.
+
+The same trap in a sharper form: a matrix job whose `name` does not reference
+the matrix gets the whole matrix appended to its check context. The selftest's
+verify job matrixes over `image_ref`, which carries a digest and therefore
+changes every run, so the context would never repeat and the required check
+could never be satisfied — deadlocking every merge. That job is named from
+`matrix.name` alone for exactly this reason. Check the real context before
+adding one here:
+
+```shell
+gh run view <run-id> --json jobs --jq '.jobs[].name'
+```
 
 ### `tag-release.json`
 

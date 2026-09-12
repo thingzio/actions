@@ -43,7 +43,10 @@
           { "context": "Lint" },
           { "context": "Workflow security audit" },
           { "context": "Test fixtures" },
-          { "context": "Verify attestations" },
+          { "context": "Analyze (actions)" },
+          { "context": "Verify ko" },
+          { "context": "Verify docker" },
+          { "context": "Verify docker-single-platform" },
           { "context": "Run the built images" }
         ]
       }

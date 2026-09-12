@@ -91,7 +91,12 @@ jobs:
       platforms: linux/amd64
 
   verify:
-    name: Verify attestations
+    # Named from matrix.name alone, deliberately. A matrix job whose `name` does
+    # not reference the matrix gets the whole matrix appended to its check name
+    # -- here that would include image_ref, which carries a digest and therefore
+    # changes every run. A required status check whose context never repeats can
+    # never be satisfied, so the branch ruleset would deadlock every merge.
+    name: Verify ${{ matrix.name }}
     needs: [ko, docker, docker-single-platform]
     # Nothing was published from a fork, so there is nothing to verify.
     if: needs.ko.outputs.digest != ''
