@@ -1,0 +1,18 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/thingzio/actions/security/advisories/new
+    about: >
+      Please report vulnerabilities privately through GitHub Security Advisories,
+      not as a public issue. A flaw in these workflows reaches the release
+      pipeline of every repository that calls them. See SECURITY.md.
+  - name: How do I verify an image?
+    url: https://github.com/thingzio/actions/blob/main/docs/verification.md
+    about: >
+      Every command for checking provenance and SBOMs, including the
+      troubleshooting section for "no attestations found".
+  - name: Question or discussion
+    url: https://github.com/thingzio/actions/issues/new
+    about: >
+      Open a regular issue and add the "question" label. Search existing issues
+      first — someone may have asked already.

@@ -1,0 +1,35 @@
+# Default owner for everything not matched below.
+* @mchmarny
+
+# The trusted build definitions. Their SLSA Build Level 3 claim rests on a
+# caller being unable to alter what runs in them, so a change here is a
+# supply-chain review rather than a CI review.
+/.github/workflows/build-ko.yaml @mchmarny
+/.github/workflows/build-docker.yaml @mchmarny
+
+# Composite actions the trusted builders compose, and the shell behind them.
+/.github/actions/ @mchmarny
+/scripts/actions/ @mchmarny
+
+# The trust boundary itself: input validation, runner allowlist, and the
+# fail-closed digest and SBOM checks that run before anything is signed.
+/scripts/validate-inputs.sh @mchmarny
+/scripts/validate-digests.sh @mchmarny
+
+# Tag derivation decides what `latest` and the moving major tags point at.
+/scripts/derive-tags.sh @mchmarny
+
+# The checksum-verified download path is the only sanctioned way a binary
+# reaches a runner.
+/scripts/install-tool.sh @mchmarny
+/scripts/lib/ @mchmarny
+
+# The only evidence these workflows actually build and attest.
+/.github/workflows/selftest.yaml @mchmarny
+/testdata/ @mchmarny
+
+# Supply chain and release plumbing.
+/.github/ @mchmarny
+/.versions.yaml @mchmarny
+/NOTICE @mchmarny
+/LICENSE @mchmarny

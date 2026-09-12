@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a new workflow, input, or capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lead with the problem you are trying to solve rather than the solution
+        you have in mind. The problem statement is the part most likely to
+        change the design.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that you cannot do today? What are you doing
+        instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a shape in mind, sketch it.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else you considered
+      description: >
+        Including "do nothing". Knowing what you rejected and why is useful.
+
+  - type: checkboxes
+    id: trust-boundary
+    attributes:
+      label: Trust boundary
+      description: >
+        The reusable workflows are trusted build definitions. Some requests
+        cannot be granted without giving up the SLSA Build Level 3 claim — see
+        [docs/slsa.md](../../blob/main/docs/slsa.md).
+      options:
+        - label: >
+            This does not require running caller-supplied commands or scripts
+            inside the build
+        - label: >
+            This does not require the caller to choose the runner

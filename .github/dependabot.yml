@@ -1,0 +1,62 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Dependabot only scans directories it is told about, and a composite action
+  # carries its own `uses:` pins. Without an entry per action directory those
+  # pins silently never get updates, which is how one repository ends up with
+  # two different versions of the same action pinned in it.
+  #
+  # Only actions that actually contain a `uses:` are listed. Keep this in sync:
+  #   grep -l 'uses:' .github/actions/*/action.yml
+  - package-ecosystem: github-actions
+    directory: .github/actions/registry-login
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: .github/actions/setup-build-tools
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: .github/actions/sbom-attest
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # The Go fixture the selftest builds. It deliberately has no third-party
+  # dependencies, so this exists to keep the declared Go version current rather
+  # than to upgrade modules.
+  - package-ecosystem: gomod
+    directory: testdata/go-app
+    schedule:
+      interval: monthly
+    groups:
+      go:
+        patterns: ["*"]
+
+  # The base image the Docker fixture is pinned to. Pinned by digest, which
+  # means it goes stale silently unless something updates it.
+  - package-ecosystem: docker
+    directory: testdata/docker-app
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]

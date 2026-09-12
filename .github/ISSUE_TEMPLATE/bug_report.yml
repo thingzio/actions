@@ -1,0 +1,82 @@
+name: Bug report
+description: A workflow or action behaves differently than documented or expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. If you think you have found a
+        security vulnerability, please **stop** and follow
+        [SECURITY.md](../../blob/main/SECURITY.md) instead — do not file it here.
+        A flaw in these workflows reaches the release pipeline of every
+        repository that calls them.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part
+      options:
+        - build-ko.yaml
+        - build-docker.yaml
+        - A composite action in .github/actions/
+        - Verification (cosign / gh attestation verify)
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The smallest set of steps that triggers it. A link to a failed public
+        workflow run is the most useful thing you can provide; the `with:` block
+        you called the workflow with is next best.
+      placeholder: |
+        1. Call the workflow with `...`
+        2. Observe `...`
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Which version
+      description: >
+        The ref you pinned, e.g. the commit SHA from your `uses:` line, or `v1`.
+      placeholder: "uses: thingzio/actions/.github/workflows/build-ko.yaml@1a2b3c4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+        Paste the failing step's output. Check it for tokens and internal
+        hostnames before posting — this is a public issue.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: >
+        Whether it worked on a previous version, whether it is intermittent, or
+        anything else that narrows it down.

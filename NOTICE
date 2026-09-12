@@ -1,0 +1,18 @@
+thingzio/actions
+Copyright 2026 Thingz LLC
+
+This product includes software developed at Thingz LLC (https://thingz.io/).
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this product except in compliance with the License. You may obtain a copy
+of the License in the LICENSE file distributed alongside this NOTICE.
+
+--------------------------------------------------------------------------------
+Third-party material
+--------------------------------------------------------------------------------
+
+None. This repository contains no vendored, copied, or derived third-party
+source. The workflows invoke third-party GitHub Actions and download released
+binaries at runtime, each pinned and verified, but none of that code is
+redistributed here. See .versions.yaml for the pinned tool versions and the
+SHA-pinned `uses:` references in .github/ for the actions.
