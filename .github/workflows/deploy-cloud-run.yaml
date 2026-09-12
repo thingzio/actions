@@ -28,14 +28,13 @@ name: Deploy (Cloud Run)
 #       permissions:
 #         contents: read
 #         id-token: write
-#       uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@<sha>  # v1.4.0
+#       uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@<sha>  # v1.4.1
 #       with:
-#         region: ${{ vars.REGION }}
-#         project_id: ${{ vars.PROJECT_ID }}
-#         workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-#         service_account: ${{ vars.DEPLOYER_SA }}
 #         targets: |
 #           service=my-serve=${{ needs.build.outputs.image_ref }}
+#
+# The deployment coordinates come from the environment's own REGION,
+# PROJECT_ID, WIF_PROVIDER and DEPLOYER_SA variables.
 
 on:
   workflow_call:
@@ -48,21 +47,31 @@ on:
         required: true
         type: string
       region:
-        description: Cloud Run region
-        required: true
+        description: >-
+          Cloud Run region. Empty reads the environment variable REGION.
+        required: false
         type: string
+        default: ''
       project_id:
-        description: GCP project ID
-        required: true
+        description: >-
+          GCP project ID. Empty reads the environment variable PROJECT_ID.
+        required: false
         type: string
+        default: ''
       workload_identity_provider:
-        description: Workload Identity Federation provider resource name
-        required: true
+        description: >-
+          Workload Identity Federation provider resource name. Empty reads the
+          environment variable WIF_PROVIDER.
+        required: false
         type: string
+        default: ''
       service_account:
-        description: Deployer service account email
-        required: true
+        description: >-
+          Deployer service account email. Empty reads the environment variable
+          DEPLOYER_SA.
+        required: false
         type: string
+        default: ''
       environment:
         description: >-
           GitHub environment the deploy job runs in, for its protection rules
@@ -105,11 +114,22 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Two deploys of the same project racing would interleave their rollouts
-    # and, worse, their scheduler pause/resume.
+    # Two deploys of the same environment racing would interleave their
+    # rollouts and, worse, their scheduler pause/resume.
     concurrency:
-      group: deploy-cloud-run-${{ inputs.project_id }}-${{ inputs.environment }}
+      group: deploy-cloud-run-${{ github.repository }}-${{ inputs.environment }}
       cancel-in-progress: false
+    # Deployment coordinates default to conventionally-named environment
+    # variables rather than being required inputs.
+    #
+    # This is not a style choice. These values live on the GitHub environment,
+    # and a job that calls a reusable workflow cannot declare `environment:` --
+    # so a caller cannot read them to pass them in. This job can, because it
+    # declares the environment itself. An explicit input still wins, for a
+    # caller that keeps them elsewhere.
+    env:
+      REGION: ${{ inputs.region != '' && inputs.region || vars.REGION }}
+      PROJECT_ID: ${{ inputs.project_id != '' && inputs.project_id || vars.PROJECT_ID }}
     steps:
       - name: Checkout the deploy definition
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -127,15 +147,19 @@ jobs:
           TARGETS: ${{ inputs.targets }}
           EXPECTED_REGISTRY: ${{ inputs.expected_registry }}
           REMOTE_REPOSITORY: ${{ inputs.remote_repository }}
-          REGION: ${{ inputs.region }}
-          PROJECT_ID: ${{ inputs.project_id }}
         run: .builder/scripts/actions/deploy-targets.sh
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ inputs.workload_identity_provider }}
-          service_account: ${{ inputs.service_account }}
+          workload_identity_provider: >-
+            ${{ inputs.workload_identity_provider != ''
+                && inputs.workload_identity_provider
+                || vars.WIF_PROVIDER }}
+          service_account: >-
+            ${{ inputs.service_account != ''
+                && inputs.service_account
+                || vars.DEPLOYER_SA }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
@@ -144,14 +168,12 @@ jobs:
         if: inputs.scheduler_job != ''
         env:
           SCHEDULER_JOB: ${{ inputs.scheduler_job }}
-          REGION: ${{ inputs.region }}
         run: .builder/scripts/actions/scheduler-state.sh pause
 
       - name: Deploy
         id: deploy
         env:
           PLAN: ${{ steps.plan.outputs.plan }}
-          REGION: ${{ inputs.region }}
         run: .builder/scripts/actions/cloud-run-deploy.sh
 
       # always(), so a failed rollout does not leave delivery paused. This is
@@ -162,5 +184,4 @@ jobs:
         if: always() && inputs.scheduler_job != ''
         env:
           SCHEDULER_JOB: ${{ inputs.scheduler_job }}
-          REGION: ${{ inputs.region }}
         run: .builder/scripts/actions/scheduler-state.sh resume

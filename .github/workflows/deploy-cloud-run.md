@@ -123,9 +123,17 @@ a scheduler that is paused and will not resume:
 - **No rollback.** A failed `gcloud run services update` leaves the previous
   revision serving, which is the safe outcome; the rollout stops at the first
   failure rather than continuing. Recovering forward is deliberate.
-- **This workflow is not covered by the selftest.** Every other workflow here is
-  exercised against a real fixture on every PR; this one would need a disposable
-  GCP project and a real deploy. The decision logic is unit-tested with gcloud
-  stubbed, and the workflow is exercised for real by its three consumers. That
-  is a genuine gap, stated rather than papered over.
+- **This workflow is not covered by the selftest**, which would need a
+  disposable GCP project and a real deploy. Its decision logic is unit tested
+  with gcloud stubbed, and it is exercised for real by its consumers.
+
+  Cloud Run absorbs much of what that gap would otherwise mean for a
+  **service**: a revision that fails to start never receives traffic, so the
+  previous revision keeps serving. The residual risk is narrower than "untested
+  deploy" suggests, and sits in three places — **jobs**, which have no traffic
+  routing and simply break on their next execution; a **healthy but wrong**
+  image, since Cloud Run validates that a revision starts, not that it is the
+  image you meant, which is why the digest check runs before authentication;
+  and the **scheduler** pause/resume, which is this workflow's own logic and
+  has no Cloud Run safety net at all.
 - **Renaming this file is a breaking change** for anyone pinning it.
