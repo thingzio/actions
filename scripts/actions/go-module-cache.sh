@@ -41,35 +41,55 @@ set -euo pipefail
 : "${WORKING_DIRECTORY:=.}"
 
 # Collapse the "current directory" spellings to nothing, and strip a leading
-# "./" from anything else, so "." "./" "" all mean the checkout root and
-# "./api" and "api" mean the same subdirectory.
-normalize_workdir() {
-  local workdir="$1"
-  case "${workdir}" in
+# "./" from anything else, so "." "./" "" all mean the root and "./api" and
+# "api" mean the same subdirectory. Applied to both halves of the join, because
+# a caller that checks its source out at the workspace root passes
+# CHECKOUT_DIR=".", and "." on the left of the join is the same bug as "." on
+# the right.
+normalize_dir() {
+  local dir="$1"
+  case "${dir}" in
     '' | '.' | './') printf '' ;;
     *)
-      workdir="${workdir#./}"
+      dir="${dir#./}"
       # A trailing slash would produce "src/api//go.sum".
-      printf '%s' "${workdir%/}"
+      printf '%s' "${dir%/}"
       ;;
   esac
 }
 
-main() {
-  local workdir dir
-  workdir="$(normalize_workdir "${WORKING_DIRECTORY}")"
-
-  if [ -z "${workdir}" ]; then
-    dir="${CHECKOUT_DIR}"
+# join_path composes the non-empty segments, so no "." or "//" can survive.
+join_path() {
+  local head="$1" tail="$2"
+  if [ -z "${head}" ]; then
+    printf '%s' "${tail}"
+  elif [ -z "${tail}" ]; then
+    printf '%s' "${head}"
   else
-    dir="${CHECKOUT_DIR}/${workdir}"
+    printf '%s/%s' "${head}" "${tail}"
   fi
+}
+
+main() {
+  local checkout workdir prefix dir lock
+
+  checkout="$(normalize_dir "${CHECKOUT_DIR}")"
+  workdir="$(normalize_dir "${WORKING_DIRECTORY}")"
+  prefix="$(join_path "${checkout}" "${workdir}")"
+
+  # Two spellings of the same location, because they are consumed by things
+  # with incompatible rules. `dir` feeds `working-directory:`, which requires a
+  # non-empty value, so the root is ".". `path` feeds cache-dependency-path,
+  # which is a glob pattern that rejects a "." segment outright, so the root is
+  # bare. Conflating them is what broke the cache in the first place.
+  dir="${prefix:-.}"
+  lock="$(join_path "${prefix}" go.sum)"
 
   emit_output dir "${dir}"
 
-  if [ -f "${dir}/go.sum" ]; then
+  if [ -f "${lock}" ]; then
     emit_output cache true
-    emit_output path "${dir}/go.sum"
+    emit_output path "${lock}"
   else
     emit_output cache false
     emit_output path ''

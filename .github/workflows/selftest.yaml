@@ -90,6 +90,25 @@ jobs:
       dockerfile: testdata/docker-app/Dockerfile
       platforms: linux/amd64
 
+  # Proves codeql-go.yaml runs end to end: that it resolves the module
+  # directory, sets up Go, and that init/build/analyze are wired together.
+  #
+  # This is not the same thing codeql.yaml declines to do. That workflow skips
+  # the `go` language because analyzing this fixture for its own sake finds
+  # nothing; here the fixture is a vehicle for testing the workflow, and the
+  # subject under test is the workflow. Findings are expected to be zero, and
+  # the analysis uploads under its own category so it cannot collide with the
+  # `actions` results codeql.yaml publishes.
+  codeql-go:
+    name: codeql-go
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql-go.yaml
+    with:
+      working_directory: testdata/go-app
+
   verify:
     # Named from matrix.name alone, deliberately. A matrix job whose `name` does
     # not reference the matrix gets the whole matrix appended to its check name

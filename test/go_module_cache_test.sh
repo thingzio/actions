@@ -96,20 +96,54 @@ test_missing_go_sum_disables_the_cache() {
   rm -rf "${root}"
 }
 
+test_checkout_at_the_workspace_root() {
+  # codeql-go.yaml checks the caller's source out at the workspace root rather
+  # than into src/, because CodeQL reports SARIF paths relative to the
+  # workspace and a subdirectory would misplace every finding. That makes
+  # CHECKOUT_DIR "." -- the same spelling that broke WORKING_DIRECTORY.
+  local root out
+  root="$(mktemp -d)"
+  printf 'h1:fake\n' >"${root}/go.sum"
+  out="$(cd "${root}" && _run CHECKOUT_DIR=. WORKING_DIRECTORY=.)"
+  assert_contains "${out}" 'path=go.sum' 'a root checkout must not produce ./go.sum'
+  assert_contains "${out}" 'cache=true' 'go.sum at the root means the cache is usable'
+  assert_contains "${out}" 'dir=.' 'working-directory needs a non-empty value, so the root is "."'
+  rm -rf "${root}"
+}
+
+test_checkout_at_the_workspace_root_with_subdirectory() {
+  local root out
+  root="$(mktemp -d)"
+  mkdir -p "${root}/api"
+  printf 'h1:fake\n' >"${root}/api/go.sum"
+  out="$(cd "${root}" && _run CHECKOUT_DIR=. WORKING_DIRECTORY=api)"
+  assert_contains "${out}" 'path=api/go.sum' 'a root checkout joins the subdirectory cleanly'
+  assert_contains "${out}" 'dir=api' 'the module directory is the subdirectory'
+  rm -rf "${root}"
+}
+
 test_no_emitted_path_contains_a_dot_segment() {
   # The regression guard, stated directly: whatever the caller writes, the
   # emitted path must never contain a "." or ".." segment, because
   # actions/cache rejects both.
-  local root out spelling
+  local root out spelling checkout
   root="$(_mkcheckout api)"
-  for spelling in '.' './' '' 'api' './api' 'api/'; do
-    out="$(cd "${root}" && _run CHECKOUT_DIR=src WORKING_DIRECTORY="${spelling}" 2>/dev/null)"
-    assert_not_contains "${out}" '/./' \
-      "working_directory '${spelling}' produced a '.' path segment"
-    assert_not_contains "${out}" '/../' \
-      "working_directory '${spelling}' produced a '..' path segment"
-    assert_not_contains "${out}" '//' \
-      "working_directory '${spelling}' produced a doubled slash"
+  mkdir -p "${root}/api"
+  printf 'h1:fake\n' >"${root}/go.sum"
+  printf 'h1:fake\n' >"${root}/api/go.sum"
+  for checkout in 'src' '.' './' ''; do
+    for spelling in '.' './' '' 'api' './api' 'api/'; do
+      out="$(cd "${root}" && _run CHECKOUT_DIR="${checkout}" WORKING_DIRECTORY="${spelling}" 2>/dev/null)"
+      assert_not_contains "${out}" '/./' \
+        "checkout '${checkout}' + working_directory '${spelling}' produced a '.' path segment"
+      assert_not_contains "${out}" '/../' \
+        "checkout '${checkout}' + working_directory '${spelling}' produced a '..' path segment"
+      assert_not_contains "${out}" '//' \
+        "checkout '${checkout}' + working_directory '${spelling}' produced a doubled slash"
+      # cache-dependency-path is a glob, so a bare "." is rejected there too.
+      assert_not_contains "${out}" 'path=./' \
+        "checkout '${checkout}' + working_directory '${spelling}' produced a leading './' in the lock path"
+    done
   done
   rm -rf "${root}"
 }
