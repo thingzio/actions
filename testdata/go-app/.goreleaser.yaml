@@ -1,9 +1,16 @@
 # Fixture config for the release-go selftest.
 #
-# Deliberately shaped the way a real caller must be: a checksum block, because
-# it is the attestation subject, and NO signs block, because signing happens in
-# the reusable workflow's isolated attest job where the caller cannot reach the
-# key.
+# Deliberately shaped the way a real caller must be, and checked against
+# scripts/check-goreleaser-config.sh by the test suite so that this file and
+# the documented obligations cannot drift apart:
+#
+#   * a checksum block, because it is the attestation subject
+#   * release.draft, because the release is created before it is signed
+#   * release.use_existing_draft, so a re-run reuses that draft rather than
+#     creating a second release for the same tag
+#   * an sboms block, because the workflow installs syft for it
+#   * NO signs block, because signing happens in the reusable workflow's
+#     isolated attest job where the caller cannot reach the key
 version: 2
 
 project_name: go-app
@@ -30,8 +37,16 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+sboms:
+  - id: archives
+    artifacts: archive
+
 release:
   draft: true
+  # GitHub does not return drafts when looking a release up by tag, so without
+  # this a re-run cannot see the draft it made last time and opens a second one
+  # for the same tag.
+  use_existing_draft: true
   prerelease: auto
 
 snapshot:

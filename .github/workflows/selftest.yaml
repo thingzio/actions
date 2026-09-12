@@ -132,10 +132,19 @@ jobs:
       working_directory: testdata/go-app
 
   # Exercises release-go without cutting a release: a snapshot build that signs,
-  # attests and publishes nothing. It proves the build job's half -- tool
-  # installation, version resolution, goreleaser invocation and the checksum
-  # requirement. The signing and attestation half is proven by a real release,
-  # which is the only place an OIDC identity exists.
+  # attests and publishes nothing.
+  #
+  # What this covers: tool installation, version resolution, the goreleaser
+  # configuration check, the goreleaser invocation itself, and the requirement
+  # that it produce a checksum file.
+  #
+  # What it does NOT cover, and cannot: everything in the attest and publish
+  # jobs -- cosign signing, the identity self-check, the checksums-describe-the-
+  # release check, provenance attestation, and the draft flip. Those need an
+  # OIDC identity and a real GitHub release, so they are first exercised by a
+  # real release. The logic inside them lives in scripts/verify-checksums.sh and
+  # scripts/check-goreleaser-config.sh precisely so the test suite can reach it
+  # without a runner; the glue holding those scripts together is not covered.
   release-go:
     name: release-go
     permissions:

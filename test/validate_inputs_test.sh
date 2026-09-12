@@ -439,6 +439,55 @@ test_release_tag_rejects_an_empty_value() {
   assert_failed
 }
 
+# Build metadata may itself contain "-", so the two suffixes have to be split
+# apart in the right order rather than searched for independently.
+test_release_tag_accepts_build_metadata_containing_a_dash() {
+  _v release-tag v1.2.3+build-5
+  assert_ok
+  assert_stdout_eq "1.2.3+build-5"
+}
+
+test_release_tag_accepts_a_prerelease_and_build_metadata_together() {
+  _v release-tag v1.2.3-rc.1+build.7
+  assert_ok
+  assert_stdout_eq "1.2.3-rc.1+build.7"
+}
+
+# A bare "-" or "+" is a truncated tag, not a version with an empty identifier.
+test_release_tag_rejects_an_empty_prerelease() {
+  _v release-tag v1.2.3-
+  assert_failed
+  assert_stderr_contains "no prerelease identifier"
+}
+
+test_release_tag_rejects_empty_build_metadata() {
+  _v release-tag v1.2.3+
+  assert_failed
+  assert_stderr_contains "no build metadata"
+}
+
+# Semver forbids leading zeros, and tolerating them would make v01.2.3 and
+# v1.2.3 two tags naming one version.
+test_release_tag_rejects_a_leading_zero_in_the_major() {
+  _v release-tag v01.2.3
+  assert_failed
+  assert_stderr_contains "leading zero"
+}
+
+test_release_tag_rejects_a_leading_zero_in_the_patch() {
+  _v release-tag v1.2.03
+  assert_failed
+  assert_stderr_contains "leading zero"
+}
+
+# A single zero component is not a leading zero. v0.1.0 is the most common
+# version a project ever has.
+test_release_tag_accepts_zero_components() {
+  _v release-tag v0.0.0
+  assert_ok
+  assert_stdout_eq "0.0.0"
+}
+
 ## release-tag-prerelease
 
 test_release_tag_prerelease_is_false_for_a_release() {
@@ -458,6 +507,21 @@ test_release_tag_prerelease_ignores_build_metadata() {
   _v release-tag-prerelease v1.2.3+build.5
   assert_ok
   assert_stdout_eq "false"
+}
+
+# The case that makes this more than a search for "-": the dash belongs to the
+# build metadata, and reading it as a prerelease marker would publish a stable
+# release as a candidate.
+test_release_tag_prerelease_ignores_a_dash_inside_build_metadata() {
+  _v release-tag-prerelease v1.2.3+build-5
+  assert_ok
+  assert_stdout_eq "false"
+}
+
+test_release_tag_prerelease_is_true_when_both_suffixes_are_present() {
+  _v release-tag-prerelease v1.2.3-rc.1+build.7
+  assert_ok
+  assert_stdout_eq "true"
 }
 
 test_release_tag_prerelease_rejects_an_invalid_tag() {

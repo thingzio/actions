@@ -195,8 +195,30 @@ test_installs_the_pinned_actionlint_and_verifies_its_checksum() {
 
 # goreleaser uses the capitalized "Linux_x86_64" archive vocabulary rather than
 # the lowercase names syft and actionlint publish, so the asset name is the
-# thing most likely to be wrong. Reaching the network is the only way to know
-# the pinned version, the asset name and the published checksum agree.
+# thing most likely to be wrong. These pin it without the network, so a mistake
+# is caught by `make test-offline` rather than only by a release.
+test_goreleaser_linux_amd64_asset_names() {
+  run _describe goreleaser v2.18.1 linux amd64
+  assert_ok
+  assert_contains "${RUN_OUT}" "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1"
+  assert_contains "${RUN_OUT}" "goreleaser_Linux_x86_64.tar.gz"
+  assert_contains "${RUN_OUT}" "checksums.txt"
+}
+
+test_goreleaser_linux_arm64_asset_names() {
+  run _describe goreleaser v2.18.1 linux arm64
+  assert_ok
+  assert_contains "${RUN_OUT}" "goreleaser_Linux_arm64.tar.gz"
+}
+
+test_goreleaser_darwin_arm64_asset_names() {
+  run _describe goreleaser v2.18.1 darwin arm64
+  assert_ok
+  assert_contains "${RUN_OUT}" "goreleaser_Darwin_arm64.tar.gz"
+}
+
+# Reaching the network is the only way to know the pinned version, the asset
+# name and the published checksum actually agree.
 test_installs_the_pinned_goreleaser_and_verifies_its_checksum() {
   local dir
   if [ -n "${THINGZ_SKIP_NETWORK_TESTS-}" ]; then

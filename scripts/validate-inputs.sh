@@ -242,12 +242,34 @@ validate_release_tag() {
   esac
 
   local major="${bare%%.*}" rest="${bare#*.}"
-  local minor="${rest%%.*}" patch="${rest#*.}"
-  patch="${patch%%[-+]*}"
+  local minor="${rest%%.*}" tail="${rest#*.}" part core build pre
+
+  # Build metadata comes off first. It may itself contain "-", so testing for a
+  # prerelease before removing it reads v1.2.3+build-5 -- a stable release --
+  # as a prerelease.
+  core="${tail%%+*}"
+  case "${tail}" in
+    *+*)
+      build="${tail#*+}"
+      [ -n "${build}" ] || die "release tag '${ref}' ends in '+' with no build metadata"
+      ;;
+  esac
+
+  case "${core}" in
+    *-*)
+      pre="${core#*-}"
+      [ -n "${pre}" ] || die "release tag '${ref}' ends in '-' with no prerelease identifier"
+      ;;
+  esac
+
+  local patch="${core%%-*}"
 
   for part in "${major}" "${minor}" "${patch}"; do
     case "${part}" in
       "" | *[!0-9]*) die "release tag '${ref}' has a non-numeric version component" ;;
+      # Semver forbids leading zeros, and tolerating them would make v01.2.3 and
+      # v1.2.3 two tags naming one version.
+      0[0-9]*) die "release tag '${ref}' has a version component with a leading zero" ;;
     esac
   done
 
@@ -257,8 +279,13 @@ validate_release_tag() {
 # release_tag_is_prerelease prints "true" when the tag carries a prerelease
 # suffix. A release candidate must not move a floating tag or publish a package
 # users install by default, and the workflow needs a single answer to that.
+#
+# Build metadata is removed before the test for the reason above: the "-" in
+# v1.2.3+build-5 belongs to the build metadata, not to a prerelease.
 release_tag_is_prerelease() {
-  case "${1#v}" in
+  local core="${1#v}"
+  core="${core%%+*}"
+  case "${core}" in
     *-*) printf 'true\n' ;;
     *) printf 'false\n' ;;
   esac

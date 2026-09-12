@@ -22,9 +22,12 @@ name: Release Go binaries
 #   attest   runs no caller code.     id-token, attestations.
 #   publish  runs no caller code.     contents: write.
 #
-# The attestation subject is checksums.txt, which already commits to every
-# artifact by digest, so the attest job needs one small file and never handles
-# a caller-produced binary at all.
+# The attestation subject is checksums.txt. That file is produced by the build
+# job, so it is caller-influenced like anything else that job emits: containing
+# digests is not the same as having produced the bytes they name. Before
+# signing it, the attest job re-derives every digest from the artifacts actually
+# attached to the release and requires them to agree, so provenance cannot name
+# a subject this release does not carry.
 #
 # Two rules follow from the same reasoning as the image workflows, and neither
 # is negotiable:
@@ -184,6 +187,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+    # `goreleaser release` creates and populates the GitHub release for a tag.
+    # Two runs for the same tag -- a duplicate webhook, a premature re-run --
+    # would interleave two of those against one release, and the checksum file
+    # one of them signs would then describe artifacts the other replaced.
+    # Serialized rather than cancelled: a half-finished release is worse than a
+    # late one. The trusted jobs need no guard of their own, since they cannot
+    # start until the build holding this group has finished.
+    concurrency:
+      group: release-go-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout the source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -216,6 +229,15 @@ jobs:
           GORELEASER_VERSION: ${{ needs.prepare.outputs.goreleaser }}
         run: .builder/scripts/install-tool.sh goreleaser "${GORELEASER_VERSION}" "${RUNNER_TEMP}/bin"
 
+      # Before goreleaser runs, not after. The obligations this checks --
+      # release.draft, release.use_existing_draft, no signs block -- are all
+      # things that cannot be undone once `goreleaser release` has created the
+      # release, and all of which otherwise fail silently with CI green.
+      - name: Check the goreleaser configuration
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: .builder/scripts/check-goreleaser-config.sh "${WORKING_DIRECTORY}"
+
       # --skip=sign because signing belongs to the attest job, where the caller
       # cannot reach the key. A caller's signs block would otherwise run cosign
       # here, beside their own hooks.
@@ -239,11 +261,41 @@ jobs:
             goreleaser release --clean --skip=sign
           fi
 
-      # Only the checksum file crosses into the trusted job. It already commits
-      # to every artifact by digest, so the attest job never handles a binary a
-      # caller's build produced.
-      - name: Stage the checksums for attestation
+      # The configuration check above requires release.draft, but it reads YAML
+      # rather than asking GitHub. This asks GitHub. If the two ever disagree --
+      # a config shape the reader misses, a goreleaser default that changes --
+      # the release is pulled back out of sight before the job fails, so the
+      # window in which unsigned artifacts were reachable is the length of this
+      # step rather than the length of the attest job.
+      - name: Assert the release is still a draft
         if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Assigned separately so a gh failure is reported as itself rather
+          # than as a published release: inside a test, a failed command
+          # substitution is just an empty string.
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "${state}" = "true" ]; then
+            echo "release ${TAG} is a draft, as required"
+            exit 0
+          fi
+          echo "::error::release ${TAG} was published before it was signed; returning it to draft"
+          gh release edit "$TAG" --draft=true
+          exit 1
+
+      # Only the checksum file crosses into the trusted job. The attest job
+      # re-derives every digest in it from the release's own artifacts before
+      # signing, so this hand-off carries no trust of its own.
+      #
+      # Not gated on dry_run: the requirement is that goreleaser produced a
+      # checksum file at all, which is as true of a snapshot build as a real
+      # one. Gating it would leave the guard with no coverage, since the
+      # selftest only ever runs a dry run.
+      - name: Stage the checksums for attestation
         working-directory: ${{ inputs.working_directory }}
         run: |
           set -euo pipefail
@@ -256,6 +308,11 @@ jobs:
           cp "${checksums}" "${RUNNER_TEMP}/attest/checksums.txt"
           echo "staged ${checksums}"
 
+      # A week rather than a day. When the attest job fails on something
+      # transient, re-running it alone is the safe recovery; re-running the
+      # build is not, because it means a second `goreleaser release` against a
+      # release that already exists. Expiring this artifact overnight would take
+      # the safe path away.
       - name: Upload the checksums
         if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -263,7 +320,7 @@ jobs:
           name: release-checksums
           path: ${{ runner.temp }}/attest/checksums.txt
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   # Holds the signing identity. Runs no caller code: it checks out only this
   # repository, and touches only the checksum file.
@@ -293,6 +350,27 @@ jobs:
         with:
           name: release-checksums
           path: ${{ runner.temp }}/attest
+
+      # The checksum file names the subjects of the provenance this job is about
+      # to mint under its own identity. It came from the job that runs the
+      # caller's hooks, so it is re-checked against the artifacts the release
+      # actually carries rather than believed. A line naming a file that is not
+      # on the release, or a digest that does not match its bytes, fails here --
+      # before a signature exists.
+      - name: Download the release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/assets"
+          gh release download "$TAG" --dir "${RUNNER_TEMP}/assets" --clobber
+
+      - name: Verify the checksums describe this release
+        run: |
+          .builder/scripts/verify-checksums.sh \
+            "${RUNNER_TEMP}/attest/checksums.txt" "${RUNNER_TEMP}/assets"
 
       - name: Record the checksums digest
         id: digest
@@ -361,10 +439,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      # goreleaser creates the release as a draft when the caller's config says
-      # so, which is the recommended setting: it keeps a release invisible
-      # until its signature has been verified above. Flipping it here is a
-      # no-op for a caller who publishes directly.
+      # The build job required release.draft and asserted it against the API, so
+      # the release has been invisible since it was created and every artifact
+      # on it has now been signed, verified and attested. This is the step that
+      # makes it visible, and the first point at which anyone can download it.
+      #
+      # gh is whatever the runner image ships. It is load-bearing here and in
+      # the attest job because addressing a draft release by tag needs the
+      # listing fallback gh grew in cli/cli#3037; every supported ubuntu image
+      # has had it for years.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
