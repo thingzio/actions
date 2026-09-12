@@ -1,0 +1,133 @@
+name: Lint (Go)
+
+# gofmt, go vet and golangci-lint over a Go repository.
+#
+# This is the half of a typical thingzio test workflow that is genuinely the
+# same everywhere. The other half -- Postgres services, DSN environment
+# variable names, package lists, scanner binaries -- differs per repository in
+# ways that would need more inputs than the duplication is worth, so it stays
+# in the calling repository.
+#
+# No input becomes shell. golangci-lint runs through its own action rather than
+# a command line, and there is no args input.
+#
+# Usage:
+#
+#   jobs:
+#     lint:
+#       permissions:
+#         contents: read
+#       uses: thingzio/actions/.github/workflows/lint-go.yaml@<sha>  # v1.3.0
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: Go version; empty reads go_version_file
+        required: false
+        type: string
+        default: ''
+      go_version_file:
+        description: File the Go version is read from, relative to working_directory
+        required: false
+        type: string
+        default: go.mod
+      working_directory:
+        description: Directory within the repository containing the Go module
+        required: false
+        type: string
+        default: '.'
+      golangci_version:
+        description: Override the pinned golangci-lint version
+        required: false
+        type: string
+        default: ''
+      gofmt:
+        description: >-
+          Fail when tracked Go files are not gofmt-clean. Vendored code is
+          excluded; it is not this repository's to format.
+        required: false
+        type: boolean
+        default: true
+      vet:
+        description: Run go vet
+        required: false
+        type: boolean
+        default: true
+      golangci:
+        description: Run golangci-lint
+        required: false
+        type: boolean
+        default: true
+      timeout_minutes:
+        description: Job timeout
+        required: false
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the lint definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.builder/.github/actions/load-versions
+
+      - name: Setup Go
+        id: go
+        uses: ./.builder/.github/actions/setup-go
+        with:
+          go_version: ${{ inputs.go_version }}
+          go_version_file: ${{ inputs.go_version_file }}
+          working_directory: ${{ inputs.working_directory }}
+
+      # git ls-files rather than a find: it lists tracked files only, so a
+      # stray .go file in a build directory cannot fail the job, and the
+      # vendor exclusion is expressed once.
+      - name: gofmt
+        if: inputs.gofmt
+        working-directory: ${{ steps.go.outputs.module_directory }}
+        run: |
+          set -euo pipefail
+          unformatted="$(git ls-files -z -- '*.go' ':(exclude)vendor/**' | xargs -0 gofmt -l)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            printf '%s\n' "${unformatted}"
+            exit 1
+          fi
+          echo "all tracked Go files are gofmt-clean"
+
+      - name: go vet
+        if: inputs.vet
+        working-directory: ${{ steps.go.outputs.module_directory }}
+        run: go vet ./...
+
+      - name: golangci-lint
+        if: inputs.golangci
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        with:
+          version: >-
+            ${{ inputs.golangci_version != ''
+                && inputs.golangci_version
+                || steps.versions.outputs.golangci_lint }}
+          working-directory: ${{ steps.go.outputs.module_directory }}

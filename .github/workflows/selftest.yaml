@@ -120,6 +120,17 @@ jobs:
     with:
       working_directory: testdata/terraform
 
+  # Lints the Go fixture through the shared workflow. The fixture is clean, so
+  # a failure here means lint-go itself broke -- a path it composes, a version
+  # it resolves, or an action it calls.
+  lint-go:
+    name: lint-go
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint-go.yaml
+    with:
+      working_directory: testdata/go-app
+
   verify:
     # Named from matrix.name alone, deliberately. A matrix job whose `name` does
     # not reference the matrix gets the whole matrix appended to its check name
