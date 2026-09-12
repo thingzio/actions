@@ -284,26 +284,24 @@ jobs:
       # lock file, and a module with no third-party dependencies legitimately
       # has no go.sum. Decide before asking rather than failing the build over
       # a cache.
-      - name: Detect the Go dependency lock file
+      # Emits the normalized module directory alongside the cache decision, so
+      # nothing below composes a path of its own. It lives in a script because
+      # the path arithmetic had a sharp edge that inline YAML hid: a default
+      # working_directory of "." produced "src/./go.sum", which the shell `-f`
+      # test accepts and actions/cache rejects, so the module cache silently
+      # never restored for any caller using the default.
+      - name: Resolve the Go module directory and cache key
         id: golock
         env:
-          WORKDIR: ${{ inputs.working_directory }}
-        run: |
-          set -euo pipefail
-          if [ -f "src/${WORKDIR}/go.sum" ]; then
-            printf 'cache=true\n' >>"${GITHUB_OUTPUT}"
-            printf 'path=src/%s/go.sum\n' "${WORKDIR}" >>"${GITHUB_OUTPUT}"
-          else
-            printf 'cache=false\n' >>"${GITHUB_OUTPUT}"
-            printf 'path=\n' >>"${GITHUB_OUTPUT}"
-            printf '::notice::no go.sum found; building without the module cache\n'
-          fi
+          CHECKOUT_DIR: src
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: .builder/scripts/actions/go-module-cache.sh
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ inputs.go_version }}
-          go-version-file: ${{ inputs.go_version == '' && format('src/{0}/go.mod', inputs.working_directory) || '' }}
+          go-version-file: ${{ inputs.go_version == '' && format('{0}/go.mod', steps.golock.outputs.dir) || '' }}
           cache: ${{ steps.golock.outputs.cache == 'true' }}
           cache-dependency-path: ${{ steps.golock.outputs.path }}
 
