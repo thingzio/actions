@@ -27,6 +27,9 @@ outputs:
   trivy:
     description: trivy version, e.g. v0.74.0
     value: ${{ steps.versions.outputs.trivy }}
+  golangci_lint:
+    description: golangci-lint version, e.g. v2.13.1
+    value: ${{ steps.versions.outputs.golangci_lint }}
   actionlint:
     description: actionlint version, e.g. v1.7.12
     value: ${{ steps.versions.outputs.actionlint }}

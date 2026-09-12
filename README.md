@@ -23,14 +23,15 @@ Pin to a commit SHA, or track the floating `@v1` tag. Current release:
 | [`build-docker.yaml`](.github/workflows/build-docker.yaml) | Builds a **Dockerfile** into a multi-platform, signed, SBOM-attested container image on native per-architecture runners. | [docs](.github/workflows/build-docker.md) |
 | [`codeql-go.yaml`](.github/workflows/codeql-go.yaml) | Runs **CodeQL** over a Go repository and uploads the results to the caller's security tab. Builds explicitly, detects vendoring, and skips private repositories so it cannot start GHAS billing by surprise. | [docs](.github/workflows/codeql-go.md) |
 | [`terraform-scan.yaml`](.github/workflows/terraform-scan.yaml) | Scans **Terraform** for misconfigurations with Trivy, failing on a severity threshold. Replaces tfsec, which is end of life and whose ruleset is frozen. | [docs](.github/workflows/terraform-scan.md) |
+| [`lint-go.yaml`](.github/workflows/lint-go.yaml) | Runs **gofmt**, **go vet** and **golangci-lint** over a Go repository, at the org-pinned linter version. | [docs](.github/workflows/lint-go.md) |
 
 Use `build-ko` whenever the answer is "a Go binary in a minimal base image";
 use `build-docker` when the image needs system packages, a non-Go runtime, or
 multiple build stages.
 
 Both build workflows reach **SLSA v1.0 Build Level 3** — see
-[SLSA](docs/slsa.md). `codeql-go` and `terraform-scan` sign nothing and
-publish no artifact, so
+[SLSA](docs/slsa.md). `codeql-go`, `terraform-scan` and `lint-go` sign
+nothing and publish no artifact, so
 the level does not apply to it; the no-caller-supplied-code rule below still
 does.
 
@@ -43,6 +44,7 @@ does.
 | Action | What it does | Docs |
 |---|---|---|
 | [`load-versions`](.github/actions/load-versions) | Reads pinned tool versions from `.versions.yaml` | [docs](.github/actions/load-versions/README.md) |
+| [`setup-go`](.github/actions/setup-go) | Configures Go from the repository's `go.mod`, caching modules only when a lock file exists | [docs](.github/actions/setup-go/README.md) |
 | [`setup-build-tools`](.github/actions/setup-build-tools) | Installs ko, crane, syft and cosign, checksum-verified | [docs](.github/actions/setup-build-tools/README.md) |
 | [`registry-login`](.github/actions/registry-login) | Authenticates to GHCR or any OCI registry | [docs](.github/actions/registry-login/README.md) |
 | [`image-tags`](.github/actions/image-tags) | Derives release tags and the candidate tag from the event | [docs](.github/actions/image-tags/README.md) |

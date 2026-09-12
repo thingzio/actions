@@ -1,0 +1,64 @@
+name: Setup Go
+description: >-
+  Configures the Go toolchain from the repository's own go.mod, enabling the
+  module cache only when a lock file exists.
+
+inputs:
+  go_version:
+    description: Explicit Go version; empty reads go_version_file
+    required: false
+    default: ''
+  go_version_file:
+    description: File the Go version is read from, relative to working_directory
+    required: false
+    default: go.mod
+  working_directory:
+    description: Directory containing the Go module
+    required: false
+    default: '.'
+  cache:
+    description: >-
+      Enable the module cache. Honoured only when a go.sum is present; a module
+      with no third-party dependencies legitimately has none, and setup-go
+      fails outright rather than degrading when caching is on and it cannot
+      find a lock file.
+    required: false
+    default: 'true'
+
+outputs:
+  module_directory:
+    description: Normalized module directory, suitable for working-directory
+    value: ${{ steps.gomod.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    # Shares scripts/actions/go-module-cache.sh with the reusable workflows, so
+    # the path arithmetic has exactly one implementation. A working_directory
+    # of "." composed naively yields "./go.sum", which the shell accepts and
+    # actions/cache rejects -- the bug that silently disabled the module cache
+    # for every caller.
+    - name: Resolve the Go module directory
+      id: gomod
+      shell: bash
+      env:
+        CHECKOUT_DIR: .
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        # GITHUB_ACTION_PATH is <checkout>/.github/actions/setup-go whether this
+        # action was reached through a local path or as
+        # thingzio/actions/.github/actions/setup-go@<ref>, so three levels up is
+        # the repository root in both cases.
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/go-module-cache.sh"
+
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      with:
+        go-version: ${{ inputs.go_version }}
+        go-version-file: >-
+          ${{ inputs.go_version == ''
+              && format('{0}/{1}', steps.gomod.outputs.dir, inputs.go_version_file)
+              || '' }}
+        cache: ${{ inputs.cache == 'true' && steps.gomod.outputs.cache == 'true' }}
+        cache-dependency-path: ${{ steps.gomod.outputs.path }}

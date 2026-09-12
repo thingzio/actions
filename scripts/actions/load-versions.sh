@@ -14,6 +14,7 @@ tools.crane
 tools.syft
 tools.cosign
 tools.trivy
+tools.golangci_lint
 tools.actionlint
 tools.yamllint
 tools.shellcheck

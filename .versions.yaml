@@ -29,6 +29,10 @@ tools:
   trivy: v0.74.0
 
   # Repository linting.
+  # golangci-lint is consumed by the lint-go reusable workflow, not installed
+  # by install-tool.sh: golangci/golangci-lint-action fetches and caches it
+  # itself, and running two installers for one tool is how versions drift.
+  golangci_lint: v2.13.1
   actionlint: v1.7.12
   yamllint: 1.38.0
 
