@@ -7,6 +7,7 @@
 #   scripts/install-tool.sh crane      v0.22.1  /usr/local/bin
 #   scripts/install-tool.sh syft       v1.51.1  .bin
 #   scripts/install-tool.sh actionlint v1.7.12  .bin
+#   scripts/install-tool.sh shellcheck v0.11.0  .bin
 #
 # This is the only sanctioned way to bring a binary onto a runner. There is no
 # `curl | bash` anywhere in this repository: a piped installer executes before
@@ -15,8 +16,11 @@
 #
 # Every project below names its artifacts differently -- ko and crane use
 # goreleaser's capitalized "Linux_x86_64", syft and actionlint use lowercase
-# "linux_amd64", and only ko and crane call the manifest plain "checksums.txt".
-# The mapping lives here so callers never have to know.
+# "linux_amd64", ShellCheck uses "linux.aarch64" and nests the binary in a
+# versioned directory, and only ko and crane call the manifest plain
+# "checksums.txt". ShellCheck publishes no manifest at all, so its digest is
+# pinned in .versions.yaml instead. The mapping lives here so callers never
+# have to know.
 #
 # Installing an already-present binary of the same version is a no-op, so the
 # script is safe to call repeatedly.
@@ -28,7 +32,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/common.sh"
 
 usage() {
-  printf 'usage: %s <ko|crane|syft|actionlint> <version> <dest-dir>\n' "${0##*/}" >&2
+  printf 'usage: %s <ko|crane|syft|actionlint|shellcheck> <version> <dest-dir>\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -50,9 +54,21 @@ goreleaser_os() {
   esac
 }
 
-# describe_tool sets BASE_URL, ARCHIVE, MANIFEST and BINARY for the requested
-# tool. Uses globals because bash 3.2, which is what macOS ships, has no
-# associative arrays and no way to return a record.
+# The ShellCheck project's release archives use GNU-style architecture names.
+shellcheck_arch() {
+  case "$1" in
+    amd64) printf 'x86_64\n' ;;
+    arm64) printf 'aarch64\n' ;;
+    *) die "unsupported architecture: $1" ;;
+  esac
+}
+
+# describe_tool sets BASE_URL, ARCHIVE, MANIFEST, BINARY and ARCHIVE_PATH for
+# the requested tool. Uses globals because bash 3.2, which is what macOS ships,
+# has no associative arrays and no way to return a record.
+#
+# An empty MANIFEST means the project publishes no checksum file and the digest
+# is pinned directly in .versions.yaml instead.
 describe_tool() {
   local tool="$1" version="$2" os="$3" arch="$4" bare="${2#v}"
 
@@ -62,27 +78,39 @@ describe_tool() {
       ARCHIVE="ko_${bare}_$(goreleaser_os "${os}")_$(goreleaser_arch "${arch}").tar.gz"
       MANIFEST="checksums.txt"
       BINARY="ko"
+      ARCHIVE_PATH="ko"
       ;;
     crane)
       BASE_URL="https://github.com/google/go-containerregistry/releases/download/${version}"
       ARCHIVE="go-containerregistry_$(goreleaser_os "${os}")_$(goreleaser_arch "${arch}").tar.gz"
       MANIFEST="checksums.txt"
       BINARY="crane"
+      ARCHIVE_PATH="crane"
       ;;
     syft)
       BASE_URL="https://github.com/anchore/syft/releases/download/${version}"
       ARCHIVE="syft_${bare}_${os}_${arch}.tar.gz"
       MANIFEST="syft_${bare}_checksums.txt"
       BINARY="syft"
+      ARCHIVE_PATH="syft"
       ;;
     actionlint)
       BASE_URL="https://github.com/rhysd/actionlint/releases/download/${version}"
       ARCHIVE="actionlint_${bare}_${os}_${arch}.tar.gz"
       MANIFEST="actionlint_${bare}_checksums.txt"
       BINARY="actionlint"
+      ARCHIVE_PATH="actionlint"
+      ;;
+    shellcheck)
+      BASE_URL="https://github.com/koalaman/shellcheck/releases/download/${version}"
+      ARCHIVE="shellcheck-${version}.${os}.$(shellcheck_arch "${arch}").tar.gz"
+      # No published checksum manifest; the digest is pinned in .versions.yaml.
+      MANIFEST=""
+      BINARY="shellcheck"
+      ARCHIVE_PATH="shellcheck-${version}/shellcheck"
       ;;
     *)
-      die "unknown tool '${tool}'; expected one of ko, crane, syft, actionlint"
+      die "unknown tool '${tool}'; expected one of ko, crane, syft, actionlint, shellcheck"
       ;;
   esac
 }
@@ -99,7 +127,9 @@ installed_version_matches() {
 
 main() {
   local tool="${1-}" version="${2-}" dest="${3-}" os arch tmp want
-  [ -n "${tool}" ] && [ -n "${version}" ] && [ -n "${dest}" ] || usage
+  if [ -z "${tool}" ] || [ -z "${version}" ] || [ -z "${dest}" ]; then
+    usage
+  fi
 
   require_no_newline tool "${tool}"
   require_no_newline version "${version}"
@@ -124,15 +154,21 @@ main() {
   # shellcheck disable=SC2064
   trap "rm -rf '${tmp}'" EXIT
 
-  fetch "${BASE_URL}/${MANIFEST}" "${tmp}/${MANIFEST}" ||
-    die "could not download the checksum manifest ${BASE_URL}/${MANIFEST}"
-  want="$(sha256_from_manifest "${tmp}/${MANIFEST}" "${ARCHIVE}")"
+  if [ -n "${MANIFEST}" ]; then
+    fetch "${BASE_URL}/${MANIFEST}" "${tmp}/${MANIFEST}" ||
+      die "could not download the checksum manifest ${BASE_URL}/${MANIFEST}"
+    want="$(sha256_from_manifest "${tmp}/${MANIFEST}" "${ARCHIVE}")"
+  else
+    want="$("${SCRIPT_DIR}/versions.sh" "checksums.${tool}_${os}_${arch}")" ||
+      die "no pinned checksum for ${tool} on ${os}/${arch}; add checksums.${tool}_${os}_${arch} to .versions.yaml"
+  fi
+
   download_verified "${BASE_URL}/${ARCHIVE}" "${tmp}/${ARCHIVE}" "${want}"
 
-  tar -xzf "${tmp}/${ARCHIVE}" -C "${tmp}" "${BINARY}" ||
-    die "archive ${ARCHIVE} did not contain a '${BINARY}' binary"
+  tar -xzf "${tmp}/${ARCHIVE}" -C "${tmp}" "${ARCHIVE_PATH}" ||
+    die "archive ${ARCHIVE} did not contain '${ARCHIVE_PATH}'"
 
-  install -m 0755 "${tmp}/${BINARY}" "${dest}/${BINARY}"
+  install -m 0755 "${tmp}/${ARCHIVE_PATH}" "${dest}/${BINARY}"
   log "installed ${tool} ${version} -> ${dest}/${BINARY}"
 }
 

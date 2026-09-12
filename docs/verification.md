@@ -16,20 +16,24 @@ to Rekor. There is no key to rotate and none to steal.
 ```bash
 gh attestation verify oci://ghcr.io/thingzio/my-app:v1.2.3 \
   --repo thingzio/my-app \
-  --signer-repo thingzio/actions \
-  --signer-workflow .github/workflows/build-ko.yaml
+  --signer-workflow thingzio/actions/.github/workflows/build-ko.yaml
 ```
 
-The three flags do different jobs and all three matter:
+Both flags matter, and they do different jobs:
 
-- `--repo` — where the attestation is stored. Always the repository whose
+- `--repo` — where the attestation is **stored**. Always the repository whose
   workflow called the builder.
-- `--signer-repo` — who signed. Always `thingzio/actions`.
-- `--signer-workflow` — which build definition signed.
+- `--signer-workflow` — who **signed** it, as
+  `[host/]<owner>/<repo>/<path>`. Always the shared build definition.
 
 Checking only `--repo` would accept an attestation a repository minted for
 itself. Pinning the signer is what makes the claim mean "built by the reviewed,
 shared build definition".
+
+`--signer-repo` also exists and takes just `<owner>/<repo>`, but the two are
+**mutually exclusive** — `gh` rejects the combination. `--signer-workflow`
+already carries the repository and pins the exact build definition, so prefer
+it.
 
 ## Verify the SBOM
 
@@ -77,8 +81,7 @@ days, if you want them without pulling from the registry.
 ```bash
 gh attestation verify oci://"${IMAGE}:v1.2.3" \
   --repo thingzio/my-app \
-  --signer-repo thingzio/actions \
-  --signer-workflow .github/workflows/build-ko.yaml \
+  --signer-workflow thingzio/actions/.github/workflows/build-ko.yaml \
   --format json \
   | jq '.[0].verificationResult.statement.predicate.buildDefinition'
 ```

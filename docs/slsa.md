@@ -31,8 +31,7 @@ A verifier can require that an image was built by *this* definition:
 ```bash
 gh attestation verify oci://ghcr.io/thingzio/my-app:v1.2.3 \
   --repo thingzio/my-app \
-  --signer-repo thingzio/actions \
-  --signer-workflow .github/workflows/build-ko.yaml
+  --signer-workflow thingzio/actions/.github/workflows/build-ko.yaml
 ```
 
 For completeness, the other identity extensions Fulcio records:
