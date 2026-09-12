@@ -1,32 +1,134 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# .gitignore for thingzio/actions
 #
-# Binaries for programs and plugins
+# Ordered most-specific to least: project artifacts, then language toolchains,
+# then OS and editor noise. Directory patterns end in "/" so they cannot
+# accidentally match a file. OS sections are derived from the upstream
+# github/gitignore and toptal gitignore.io templates.
+
+### Project ###
+
+# Pinned tool binaries installed by `make tools`; versions live in .versions.yaml
+.bin/
+
+# Agent working notes. Specs and plans are local scratch, not shipped content.
+docs/superpowers/
+
+### Secrets and local configuration ###
+
+.env
+.env.*
+!.env.example
+
+### Go ###
+
+# Compiled binaries and plugins
+*.dll
+*.dylib
 *.exe
 *.exe~
-*.dll
 *.so
-*.dylib
 
 # Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
+# Coverage profiles and other test artifacts
+*.coverprofile
 *.out
 coverage.*
-*.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
+# Go workspace files
 go.work
 go.work.sum
 
-# env file
-.env
+# Dependency directory (uncomment if this repo ever vendors)
+# vendor/
 
-# Editor/IDE
+### Node ###
+
+node_modules/
+package-lock.json
+
+### macOS ###
+
+# General
+.AppleDouble
+.DS_Store
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.com.apple.timemachine.donotpresent
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+.apdisk
+Network Trash Folder
+Temporary Items
+
+# iCloud generated files
+*.icloud
+
+### Linux ###
+
+*~
+
+# Temporary files created when a process still holds a handle on a deleted file
+.fuse_hidden*
+
+# Created when an open file is removed but is still being accessed
+.nfs*
+
+# KDE directory preferences
+.directory
+
+# Trash folder, which may appear on any partition or disk
+.Trash-*
+
+### Windows ###
+
+# Thumbnail cache files
+ehthumbs.db
+ehthumbs_vista.db
+Thumbs.db
+Thumbs.db:encryptable
+
+# Dump file
+*.stackdump
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Shortcuts
+*.lnk
+
+### Editors and IDEs ###
+
+# Uncomment to ignore locally; prefer committing shared settings deliberately.
 # .idea/
 # .vscode/
+*.swp
+*.swo
