@@ -1,0 +1,46 @@
+# yamllint configuration.
+#
+# Tuned for GitHub Actions rather than for generic YAML. Workflow files are
+# wide by nature (a SHA-pinned `uses:` with a version comment is already ~70
+# characters before indentation), and GitHub requires the unquoted `on:` key
+# that YAML 1.1 parsers read as the boolean true.
+
+extends: default
+
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+
+ignore: |
+  .bin/
+  docs/superpowers/
+
+rules:
+  # GitHub Actions requires the literal `on:` key. Without this, every workflow
+  # in the repository fails with "truthy value should be one of [false, true]".
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false
+
+  # SHA-pinned action references plus a trailing version comment do not fit in
+  # 80 columns and wrapping them would hurt readability more than the length.
+  line-length:
+    max: 120
+    level: warning
+
+  # `on:` and `jobs:` at column 0 with two-space nesting is the house style and
+  # what every published workflow example uses.
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+
+  comments:
+    min-spaces-from-content: 1
+
+  document-start: disable
+
+  braces:
+    max-spaces-inside: 1
+
+  brackets:
+    max-spaces-inside: 1

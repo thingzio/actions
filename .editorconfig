@@ -1,0 +1,30 @@
+# https://editorconfig.org
+#
+# Keeps whitespace consistent across editors so a formatting diff never hides a
+# behavioural one in review.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{yaml,yml}]
+indent_size = 2
+
+[*.sh]
+indent_size = 2
+
+[*.go]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+# Two trailing spaces are a hard line break in Markdown.
+trim_trailing_whitespace = false
