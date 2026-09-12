@@ -1,0 +1,158 @@
+name: CodeQL (Go)
+
+# Runs CodeQL static analysis over a Go repository and uploads the results to
+# the calling repository's security tab.
+#
+# Unlike the build workflows, this one signs nothing and publishes no artifact,
+# so the SLSA Build Level 3 reasoning does not apply to it. The no-caller-code
+# rule still does: there is no build_command input. The build is fixed at
+# `go build ./...`, which is what every thingzio Go repository was already
+# running, and vendoring is detected rather than configured.
+#
+# CodeQL is free on public repositories and billed as GitHub Advanced Security
+# on private ones. The analysis is therefore skipped on private repositories
+# unless a caller opts in, so adding this workflow to a repository before it
+# goes public cannot quietly start billing.
+#
+# Usage:
+#
+#   jobs:
+#     codeql:
+#       permissions:
+#         actions: read
+#         contents: read
+#         security-events: write
+#       uses: thingzio/actions/.github/workflows/codeql-go.yaml@<sha>  # v1.1.0
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: Go version; empty reads go_version_file
+        required: false
+        type: string
+        default: ''
+      go_version_file:
+        description: >-
+          File the Go version is read from, relative to working_directory.
+          Ignored when go_version is set.
+        required: false
+        type: string
+        default: go.mod
+      working_directory:
+        description: Directory within the repository containing the Go module
+        required: false
+        type: string
+        default: '.'
+      category:
+        description: >-
+          Code-scanning category, distinguishing one analysis from another in
+          the same repository. Required when a repository calls this workflow
+          more than once, because the job inside it is always named the same
+          and the derived default would therefore collide.
+        required: false
+        type: string
+        default: ''
+      run_on_private:
+        description: >-
+          Analyze even when the repository is private. CodeQL is billed as
+          GitHub Advanced Security there, so this defaults to false.
+        required: false
+        type: boolean
+        default: false
+      timeout_minutes:
+        description: Job timeout
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze
+    # Skipped rather than failed: a private repository that adopts this
+    # workflow ahead of going public gets a green no-op, and starts being
+    # analyzed by itself on the day it flips.
+    if: inputs.run_on_private || github.event.repository.visibility == 'public'
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      # The source goes at the workspace root, not into a subdirectory as the
+      # build workflows do. CodeQL reports SARIF paths relative to the
+      # workspace, and every finding in the caller's security tab would carry a
+      # bogus "src/" prefix otherwise -- links from the security tab to the
+      # source would all miss.
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Inside a reusable workflow a relative `uses:`/`run:` resolves against
+      # the caller's checkout, so this repository's own scripts have to be
+      # fetched explicitly. job.workflow_repository and job.workflow_sha name
+      # this file at the exact commit running, so the workflow and its scripts
+      # cannot version-skew even behind the floating @v1 tag. The leading dot
+      # also keeps it out of `go build ./...`, which ignores dot directories.
+      - name: Checkout the analysis definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      # Same normalization the build workflows use, for the same reason: a
+      # working_directory of "." composed naively yields "./go.sum", which the
+      # shell accepts and actions/cache rejects. Emitting the directory once
+      # means nothing below joins paths.
+      - name: Resolve the Go module directory
+        id: gomod
+        env:
+          CHECKOUT_DIR: .
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: .builder/scripts/actions/go-module-cache.sh
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: ${{ inputs.go_version }}
+          go-version-file: >-
+            ${{ inputs.go_version == ''
+                && format('{0}/{1}', steps.gomod.outputs.dir, inputs.go_version_file)
+                || '' }}
+          cache: ${{ steps.gomod.outputs.cache == 'true' }}
+          cache-dependency-path: ${{ steps.gomod.outputs.path }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63  # v4.38.0
+        with:
+          languages: go
+
+      # Explicit build rather than autobuild. Autobuild does not reliably pick
+      # up -mod=vendor, and most thingzio Go repositories vendor; a build that
+      # silently analyzes nothing is the failure mode worth avoiding here,
+      # because it reports success.
+      #
+      # Vendoring is detected, not configured. Go enables -mod=vendor by itself
+      # when vendor/modules.txt is present, so setting it explicitly only makes
+      # the intent visible in the log -- and a caller cannot get it wrong.
+      - name: Build
+        working-directory: ${{ steps.gomod.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if [ -f vendor/modules.txt ]; then
+            echo "vendor/modules.txt present: building with -mod=vendor"
+            export GOFLAGS=-mod=vendor
+          fi
+          go build ./...
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63  # v4.38.0
+        with:
+          category: ${{ inputs.category }}
