@@ -1,4 +1,10 @@
-# Verifying an image
+# Verifying a release
+
+These workflows publish two kinds of artifact — container images and Go
+binaries — and both carry signed evidence. Images are covered first; jump to
+[Verifying a binary](#verifying-a-binary) for `release-go.yaml` releases.
+
+## Images
 
 Every image these workflows publish carries two kinds of signed evidence:
 
@@ -103,6 +109,51 @@ This is transparent to `cosign`, `oras` and `gh`, which is why every command on
 this page uses one of those rather than a raw registry API call. A direct
 `curl` against the referrers endpoint will return nothing and is not evidence
 that the attestation is missing.
+
+## Verifying a binary
+
+A release from [`release-go.yaml`](../.github/workflows/release-go.md) carries
+one Sigstore signature over `checksums.txt` and SLSA provenance covering every
+artifact that file names. One signature is enough because the checksum file
+commits to each artifact by digest — and the workflow proves that correspondence
+before signing, by re-deriving every digest from the artifacts on the release.
+
+```bash
+gh release download v1.2.3 --repo thingzio/my-app \
+  -p 'checksums.txt' -p 'checksums.txt.bundle' -p '*_linux_amd64.tar.gz'
+
+# 1. The checksum file was signed by the shared build definition.
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.bundle \
+  --certificate-identity-regexp '^https://github\.com/thingzio/actions/\.github/workflows/release-go\.yaml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# 2. The artifact you downloaded is one the signed file commits to.
+sha256sum --check --ignore-missing checksums.txt
+```
+
+The identity is the point: the signer is **the reusable workflow**, not the
+repository being released. Verifying without
+`--certificate-identity-regexp` would accept a signature from anyone.
+
+`--ignore-missing` is what lets step 2 work on a subset of the release. Without
+it, `sha256sum` fails on every artifact you did not download.
+
+Provenance is verified separately, and covers each artifact by name:
+
+```bash
+gh attestation verify my-app_1.2.3_linux_amd64.tar.gz \
+  --repo thingzio/my-app \
+  --signer-workflow thingzio/actions/.github/workflows/release-go.yaml
+```
+
+`--signer-workflow` does the same job here as for images: without it the check
+passes for provenance signed by any workflow in the repository, including one an
+attacker added.
+
+SBOMs are attached as release assets when the caller's `.goreleaser.yaml` has an
+`sboms:` block. They are covered by `checksums.txt` like any other artifact, so
+step 2 verifies them too; they carry no separate attestation.
 
 ## Enforcing verification in Kubernetes
 

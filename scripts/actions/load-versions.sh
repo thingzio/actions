@@ -12,6 +12,7 @@ KEYS="
 tools.ko
 tools.crane
 tools.syft
+tools.goreleaser
 tools.cosign
 tools.trivy
 tools.golangci_lint

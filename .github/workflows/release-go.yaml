@@ -1,0 +1,456 @@
+name: Release Go binaries
+
+# Releases a Go repository's binaries with goreleaser, signs the checksum file
+# with a keyless Sigstore signature, and attaches SLSA build provenance.
+#
+# THIS FILE IS A TRUSTED BUILD DEFINITION.
+#
+# It differs from build-ko.yaml and build-docker.yaml in one structural way,
+# and the difference is the whole design:
+#
+#   goreleaser executes code from the calling repository. A .goreleaser.yaml
+#   carries before.hooks, builds.hooks and signs.cmd, all arbitrary shell, all
+#   authored by the caller. ko and docker buildx execute no caller config, so
+#   those workflows can build and attest in one job. This one cannot.
+#
+# If the OIDC token were present while caller hooks ran, a hook could take it
+# and mint provenance naming this workflow as the builder for bytes this
+# workflow never produced. That is exactly the forgery Build Level 3 excludes,
+# so the jobs are split by what they are allowed to touch:
+#
+#   build    runs caller code.        contents: write.  NO id-token.
+#   attest   runs no caller code.     id-token, attestations.
+#   publish  runs no caller code.     contents: write.
+#
+# The attestation subject is checksums.txt. That file is produced by the build
+# job, so it is caller-influenced like anything else that job emits: containing
+# digests is not the same as having produced the bytes they name. Before
+# signing it, the attest job re-derives every digest from the artifacts actually
+# attached to the release and requires them to agree, so provenance cannot name
+# a subject this release does not carry.
+#
+# Two rules follow from the same reasoning as the image workflows, and neither
+# is negotiable:
+#
+#   1. No input may become shell. There is no args, no extra_flags, no
+#      pre_release_script. goreleaser's own flags are fixed here.
+#
+#   2. runs-on is not caller-controlled.
+#
+# Callers must NOT keep a `signs:` block in .goreleaser.yaml. Signing happens
+# in the attest job, where the caller cannot reach the key; a signs block would
+# run cosign beside the hooks and is skipped with --skip=sign.
+#
+# Usage:
+#
+#   jobs:
+#     release:
+#       permissions:
+#         contents: write
+#         id-token: write
+#         attestations: write
+#       uses: thingzio/actions/.github/workflows/release-go.yaml@<sha>  # v1.6.0
+#       secrets:
+#         homebrew_deploy_key: ${{ secrets.HOMEBREW_DEPLOY_KEY }}
+#
+# Pin this by commit SHA. A floating tag is a build definition someone can
+# move, which is the mutable-builder problem Level 3 exists to exclude --
+# see docs/slsa.md.
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: Go version. Overrides go_version_file when set.
+        type: string
+        required: false
+        default: ""
+      go_version_file:
+        description: File to read the Go version from.
+        type: string
+        required: false
+        default: .go-version
+      working_directory:
+        description: Directory holding go.mod and .goreleaser.yaml.
+        type: string
+        required: false
+        default: "."
+      goreleaser_version:
+        description: goreleaser version. Defaults to the pinned version.
+        type: string
+        required: false
+        default: ""
+      syft_version:
+        description: syft version, for SBOM generation. Defaults to the pinned version.
+        type: string
+        required: false
+        default: ""
+      cosign_version:
+        description: >-
+          cosign version. Defaults to the pinned version, which is held at
+          >= v3.1.0 so DSSE attestations reach Rekor v2 as hashedrekord/PAE
+          rather than the legacy entry type sigstore-go cannot verify.
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: >-
+          Build without releasing. Runs goreleaser in snapshot mode and skips
+          signing, attestation and publication.
+
+          This exists so the workflow can be exercised without cutting a
+          release. It is not a way to test a real release: a snapshot build
+          publishes nothing and signs nothing.
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      homebrew_deploy_key:
+        description: >-
+          Token with contents:write on the Homebrew tap repository. Absent, a
+          caller's homebrew_casks block should guard its own skip_upload so
+          goreleaser does not attempt a cross-repository push.
+        required: false
+    outputs:
+      version:
+        description: The released version, without the leading v
+        value: ${{ jobs.prepare.outputs.version }}
+      prerelease:
+        description: Whether the tag is a prerelease
+        value: ${{ jobs.prepare.outputs.prerelease }}
+      checksums_digest:
+        description: SHA-256 of the signed checksums file
+        value: ${{ jobs.attest.outputs.checksums_digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      goreleaser: >-
+        ${{ inputs.goreleaser_version != '' && inputs.goreleaser_version
+            || steps.versions.outputs.goreleaser }}
+      syft: ${{ inputs.syft_version != '' && inputs.syft_version || steps.versions.outputs.syft }}
+      cosign: ${{ inputs.cosign_version != '' && inputs.cosign_version || steps.versions.outputs.cosign }}
+    steps:
+      # The build definition checks itself out. Inside a reusable workflow a
+      # relative `uses: ./...` resolves against the CALLER's checkout, so the
+      # only way to reach this repository's own actions and scripts is to fetch
+      # them explicitly at the commit that is running.
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.builder/.github/actions/load-versions
+
+      # A ref is caller-influenced input like any other. A release built from a
+      # branch would publish provenance naming a ref that moves, so a verifier
+      # could not tell which tree it described.
+      - name: Validate the release tag
+        id: tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "${REF_TYPE}" != "tag" ]; then
+            echo "::error::release-go must be triggered by a tag, got ${REF_TYPE} '${REF_NAME}'"
+            exit 1
+          fi
+          version="$(.builder/scripts/validate-inputs.sh release-tag "${REF_NAME}")"
+          prerelease="$(.builder/scripts/validate-inputs.sh release-tag-prerelease "${REF_NAME}")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "releasing ${version} (prerelease=${prerelease})"
+
+  # Runs the caller's goreleaser, which runs the caller's hooks. This job holds
+  # no id-token, so nothing it runs can reach a signing identity.
+  build:
+    name: Build
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    # `goreleaser release` creates and populates the GitHub release for a tag.
+    # Two runs for the same tag -- a duplicate webhook, a premature re-run --
+    # would interleave two of those against one release, and the checksum file
+    # one of them signs would then describe artifacts the other replaced.
+    # Serialized rather than cancelled: a half-finished release is worse than a
+    # late one. The trusted jobs need no guard of their own, since they cannot
+    # start until the build holding this group has finished.
+    concurrency:
+      group: release-go-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: ./.builder/.github/actions/setup-go
+        with:
+          go_version: ${{ inputs.go_version }}
+          go_version_file: ${{ inputs.go_version_file }}
+          working_directory: ${{ inputs.working_directory }}
+
+      - name: Install syft
+        env:
+          SYFT_VERSION: ${{ needs.prepare.outputs.syft }}
+        run: .builder/scripts/install-tool.sh syft "${SYFT_VERSION}" "${RUNNER_TEMP}/bin"
+
+      - name: Install goreleaser
+        env:
+          GORELEASER_VERSION: ${{ needs.prepare.outputs.goreleaser }}
+        run: .builder/scripts/install-tool.sh goreleaser "${GORELEASER_VERSION}" "${RUNNER_TEMP}/bin"
+
+      # Before goreleaser runs, not after. The obligations this checks --
+      # release.draft, release.use_existing_draft, no signs block -- are all
+      # things that cannot be undone once `goreleaser release` has created the
+      # release, and all of which otherwise fail silently with CI green.
+      - name: Check the goreleaser configuration
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        run: .builder/scripts/check-goreleaser-config.sh "${WORKING_DIRECTORY}"
+
+      # --skip=sign because signing belongs to the attest job, where the caller
+      # cannot reach the key. A caller's signs block would otherwise run cosign
+      # here, beside their own hooks.
+      - name: Release
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_DEPLOY_KEY: ${{ secrets.homebrew_deploy_key }}
+          # Stated rather than inferred. goreleaser otherwise resolves the tag
+          # with `git describe`, which is ambiguous when two tags share a
+          # commit -- a release cut on the same commit as its candidate then
+          # tries to overwrite the candidate's immutable release.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          export PATH="${RUNNER_TEMP}/bin:${PATH}"
+          if [ "${DRY_RUN}" = "true" ]; then
+            goreleaser release --snapshot --clean --skip=sign,publish,announce
+          else
+            goreleaser release --clean --skip=sign
+          fi
+
+      # The configuration check above requires release.draft, but it reads YAML
+      # rather than asking GitHub. This asks GitHub. If the two ever disagree --
+      # a config shape the reader misses, a goreleaser default that changes --
+      # the release is pulled back out of sight before the job fails, so the
+      # window in which unsigned artifacts were reachable is the length of this
+      # step rather than the length of the attest job.
+      - name: Assert the release is still a draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Assigned separately so a gh failure is reported as itself rather
+          # than as a published release: inside a test, a failed command
+          # substitution is just an empty string.
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "${state}" = "true" ]; then
+            echo "release ${TAG} is a draft, as required"
+            exit 0
+          fi
+          echo "::error::release ${TAG} was published before it was signed; returning it to draft"
+          gh release edit "$TAG" --draft=true
+          exit 1
+
+      # Only the checksum file crosses into the trusted job. The attest job
+      # re-derives every digest in it from the release's own artifacts before
+      # signing, so this hand-off carries no trust of its own.
+      #
+      # Not gated on dry_run: the requirement is that goreleaser produced a
+      # checksum file at all, which is as true of a snapshot build as a real
+      # one. Gating it would leave the guard with no coverage, since the
+      # selftest only ever runs a dry run.
+      - name: Stage the checksums for attestation
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          checksums="$(find dist -maxdepth 1 -name '*checksums.txt' -print -quit)"
+          if [ -z "${checksums}" ]; then
+            echo "::error::goreleaser produced no checksums file; a checksum block is required"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/attest"
+          cp "${checksums}" "${RUNNER_TEMP}/attest/checksums.txt"
+          echo "staged ${checksums}"
+
+      # A week rather than a day. When the attest job fails on something
+      # transient, re-running it alone is the safe recovery; re-running the
+      # build is not, because it means a second `goreleaser release` against a
+      # release that already exists. Expiring this artifact overnight would take
+      # the safe path away.
+      - name: Upload the checksums
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-checksums
+          path: ${{ runner.temp }}/attest/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  # Holds the signing identity. Runs no caller code: it checks out only this
+  # repository, and touches only the checksum file.
+  attest:
+    name: Attest
+    needs: [prepare, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      checksums_digest: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Download the checksums
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: release-checksums
+          path: ${{ runner.temp }}/attest
+
+      # The checksum file names the subjects of the provenance this job is about
+      # to mint under its own identity. It came from the job that runs the
+      # caller's hooks, so it is re-checked against the artifacts the release
+      # actually carries rather than believed. A line naming a file that is not
+      # on the release, or a digest that does not match its bytes, fails here --
+      # before a signature exists.
+      - name: Download the release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/assets"
+          gh release download "$TAG" --dir "${RUNNER_TEMP}/assets" --clobber
+
+      - name: Verify the checksums describe this release
+        run: |
+          .builder/scripts/verify-checksums.sh \
+            "${RUNNER_TEMP}/attest/checksums.txt" "${RUNNER_TEMP}/assets"
+
+      - name: Record the checksums digest
+        id: digest
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum "${RUNNER_TEMP}/attest/checksums.txt" | awk '{print $1}')"
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          echo "checksums sha256=${sha}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: ${{ needs.prepare.outputs.cosign }}
+
+      # One signature over the checksum file covers every artifact, because the
+      # file commits to each by digest. The bundle carries the certificate and
+      # the transparency-log inclusion proof, so a verifier needs one file and
+      # no network call to the log.
+      - name: Sign the checksums
+        working-directory: ${{ runner.temp }}/attest
+        run: cosign sign-blob checksums.txt --bundle checksums.txt.bundle --yes
+
+      - name: Verify the signature before publishing it
+        working-directory: ${{ runner.temp }}/attest
+        env:
+          BUILDER_REPO: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          # The signer is this reusable workflow, not the caller. That is the
+          # Build Level 3 property, and asserting it here means a release fails
+          # rather than publishing a signature nobody checked.
+          #
+          # The ref is deliberately left open: a caller may pin this workflow
+          # by SHA or by tag and both are legitimate signers. What must not
+          # vary is the repository and the file. A repository name admits only
+          # one regular-expression metacharacter, so escaping "." is enough.
+          escaped="${BUILDER_REPO//./\\.}"
+          identity="^https://github\\.com/${escaped}/\\.github/workflows/release-go\\.yaml@"
+          echo "requiring signer identity: ${identity}"
+          cosign verify-blob checksums.txt \
+            --bundle checksums.txt.bundle \
+            --certificate-identity-regexp "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - name: Attach the signature to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        working-directory: ${{ runner.temp }}/attest
+        run: gh release upload "$TAG" checksums.txt.bundle --clobber
+
+      # subject-checksums attests every artifact the file names, so provenance
+      # covers the whole release without this job downloading any of it.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/attest/checksums.txt
+
+  publish:
+    name: Publish
+    needs: [prepare, attest]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # The build job required release.draft and asserted it against the API, so
+      # the release has been invisible since it was created and every artifact
+      # on it has now been signed, verified and attested. This is the step that
+      # makes it visible, and the first point at which anyone can download it.
+      #
+      # gh is whatever the runner image ships. It is load-bearing here and in
+      # the attest job because addressing a draft release by tag needs the
+      # listing fallback gh grew in cli/cli#3037; every supported ubuntu image
+      # has had it for years.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false

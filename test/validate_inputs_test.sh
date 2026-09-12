@@ -367,3 +367,164 @@ test_wrong_argument_count_shows_usage() {
   assert_rc 2
   assert_stderr_contains "usage:"
 }
+
+## release-tag
+
+test_release_tag_accepts_a_semver_tag() {
+  _v release-tag v1.2.3
+  assert_ok
+  assert_stdout_eq "1.2.3"
+}
+
+test_release_tag_strips_the_leading_v() {
+  _v release-tag v0.1.0
+  assert_ok
+  assert_stdout_eq "0.1.0"
+}
+
+test_release_tag_accepts_a_prerelease() {
+  _v release-tag v1.2.3-rc.1
+  assert_ok
+  assert_stdout_eq "1.2.3-rc.1"
+}
+
+test_release_tag_accepts_build_metadata() {
+  _v release-tag v1.2.3+build.5
+  assert_ok
+  assert_stdout_eq "1.2.3+build.5"
+}
+
+# A release built from a branch would publish provenance naming a ref that
+# moves, so a verifier could not tell which tree it described.
+test_release_tag_rejects_a_branch_name() {
+  _v release-tag main
+  assert_failed
+}
+
+test_release_tag_rejects_a_tag_without_the_v() {
+  _v release-tag 1.2.3
+  assert_failed
+}
+
+test_release_tag_rejects_a_two_component_version() {
+  _v release-tag v1.2
+  assert_failed
+}
+
+test_release_tag_rejects_a_non_numeric_component() {
+  _v release-tag v1.2.x
+  assert_failed
+}
+
+test_release_tag_rejects_a_letters_only_version() {
+  _v release-tag vx.y.z
+  assert_failed
+}
+
+# A newline could forge a second workflow output, which is how a validated
+# value becomes an injection.
+test_release_tag_rejects_a_newline() {
+  _v release-tag "v1.2.3
+version=0.0.0-evil"
+  assert_failed
+}
+
+test_release_tag_rejects_shell_metacharacters() {
+  _v release-tag 'v1.2.3;id'
+  assert_failed
+}
+
+test_release_tag_rejects_an_empty_value() {
+  _v release-tag ""
+  assert_failed
+}
+
+# Build metadata may itself contain "-", so the two suffixes have to be split
+# apart in the right order rather than searched for independently.
+test_release_tag_accepts_build_metadata_containing_a_dash() {
+  _v release-tag v1.2.3+build-5
+  assert_ok
+  assert_stdout_eq "1.2.3+build-5"
+}
+
+test_release_tag_accepts_a_prerelease_and_build_metadata_together() {
+  _v release-tag v1.2.3-rc.1+build.7
+  assert_ok
+  assert_stdout_eq "1.2.3-rc.1+build.7"
+}
+
+# A bare "-" or "+" is a truncated tag, not a version with an empty identifier.
+test_release_tag_rejects_an_empty_prerelease() {
+  _v release-tag v1.2.3-
+  assert_failed
+  assert_stderr_contains "no prerelease identifier"
+}
+
+test_release_tag_rejects_empty_build_metadata() {
+  _v release-tag v1.2.3+
+  assert_failed
+  assert_stderr_contains "no build metadata"
+}
+
+# Semver forbids leading zeros, and tolerating them would make v01.2.3 and
+# v1.2.3 two tags naming one version.
+test_release_tag_rejects_a_leading_zero_in_the_major() {
+  _v release-tag v01.2.3
+  assert_failed
+  assert_stderr_contains "leading zero"
+}
+
+test_release_tag_rejects_a_leading_zero_in_the_patch() {
+  _v release-tag v1.2.03
+  assert_failed
+  assert_stderr_contains "leading zero"
+}
+
+# A single zero component is not a leading zero. v0.1.0 is the most common
+# version a project ever has.
+test_release_tag_accepts_zero_components() {
+  _v release-tag v0.0.0
+  assert_ok
+  assert_stdout_eq "0.0.0"
+}
+
+## release-tag-prerelease
+
+test_release_tag_prerelease_is_false_for_a_release() {
+  _v release-tag-prerelease v1.2.3
+  assert_ok
+  assert_stdout_eq "false"
+}
+
+test_release_tag_prerelease_is_true_for_a_candidate() {
+  _v release-tag-prerelease v1.2.3-rc.1
+  assert_ok
+  assert_stdout_eq "true"
+}
+
+# Build metadata is not a prerelease: v1.2.3+build.5 is still a release.
+test_release_tag_prerelease_ignores_build_metadata() {
+  _v release-tag-prerelease v1.2.3+build.5
+  assert_ok
+  assert_stdout_eq "false"
+}
+
+# The case that makes this more than a search for "-": the dash belongs to the
+# build metadata, and reading it as a prerelease marker would publish a stable
+# release as a candidate.
+test_release_tag_prerelease_ignores_a_dash_inside_build_metadata() {
+  _v release-tag-prerelease v1.2.3+build-5
+  assert_ok
+  assert_stdout_eq "false"
+}
+
+test_release_tag_prerelease_is_true_when_both_suffixes_are_present() {
+  _v release-tag-prerelease v1.2.3-rc.1+build.7
+  assert_ok
+  assert_stdout_eq "true"
+}
+
+test_release_tag_prerelease_rejects_an_invalid_tag() {
+  _v release-tag-prerelease main
+  assert_failed
+}

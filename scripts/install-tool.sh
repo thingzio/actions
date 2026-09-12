@@ -113,6 +113,13 @@ describe_tool() {
       BINARY="syft"
       ARCHIVE_PATH="syft"
       ;;
+    goreleaser)
+      BASE_URL="https://github.com/goreleaser/goreleaser/releases/download/${version}"
+      ARCHIVE="goreleaser_$(goreleaser_os "${os}")_$(goreleaser_arch "${arch}").tar.gz"
+      MANIFEST="checksums.txt"
+      BINARY="goreleaser"
+      ARCHIVE_PATH="goreleaser"
+      ;;
     actionlint)
       BASE_URL="https://github.com/rhysd/actionlint/releases/download/${version}"
       ARCHIVE="actionlint_${bare}_${os}_${arch}.tar.gz"
@@ -136,7 +143,7 @@ describe_tool() {
       ARCHIVE_PATH="shellcheck-${version}/shellcheck"
       ;;
     *)
-      die "unknown tool '${tool}'; expected one of ko, crane, syft, actionlint, trivy, shellcheck"
+      die "unknown tool '${tool}'; expected one of ko, crane, syft, goreleaser, actionlint, trivy, shellcheck"
       ;;
   esac
 }

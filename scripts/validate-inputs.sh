@@ -6,6 +6,7 @@
 #   scripts/validate-inputs.sh platforms <comma-separated-platforms>
 #   scripts/validate-inputs.sh kv        <input-name> <key=value lines>
 #   scripts/validate-inputs.sh ko-flags  <flags>
+#   scripts/validate-inputs.sh release-tag <ref-name>
 #
 # This is the trust boundary. Everything a consumer repository passes into a
 # reusable workflow arrives here first, and nothing downstream re-checks it.
@@ -38,7 +39,7 @@ OCI_REPOSITORY="^${OCI_COMPONENT}(/${OCI_COMPONENT})*\$"
 REGISTRY_PATTERN='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
 
 usage() {
-  printf 'usage: %s <image|platforms|kv|ko-flags> [args...]\n' "${0##*/}" >&2
+  printf 'usage: %s <image|platforms|kv|ko-flags|release-tag> [args...]\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -207,6 +208,89 @@ validate_ko_flags() {
   IFS="${saved_ifs}"
 }
 
+# validate_release_tag accepts a semantic-version tag and rejects everything
+# else, echoing the version with the leading "v" removed.
+#
+# A release workflow triggered on a branch would publish provenance naming a
+# ref that moves, so a verifier could not tell which tree it described. The
+# check is here rather than in the workflow because a ref is caller-influenced
+# input like any other.
+#
+# Prereleases are accepted: v1.2.3-rc.1 is a legitimate release, and the
+# workflow skips the parts that must not run for one.
+validate_release_tag() {
+  local ref="$1" bare
+
+  case "${ref}" in
+    *[!-.+0-9A-Za-z]*)
+      die "release tag '${ref}' contains a character that is not allowed in a tag"
+      ;;
+  esac
+
+  case "${ref}" in
+    v[0-9]*) ;;
+    *) die "release tag '${ref}' does not start with a version, e.g. v1.2.3" ;;
+  esac
+
+  bare="${ref#v}"
+  # Three dot-separated numeric components, then an optional -prerelease and an
+  # optional +build. Spelled out rather than regex because bash 3.2 has no
+  # =~ portability guarantee worth relying on across macOS and Linux.
+  case "${bare}" in
+    *.*.*) ;;
+    *) die "release tag '${ref}' is not major.minor.patch, e.g. v1.2.3" ;;
+  esac
+
+  local major="${bare%%.*}" rest="${bare#*.}"
+  local minor="${rest%%.*}" tail="${rest#*.}" part core build pre
+
+  # Build metadata comes off first. It may itself contain "-", so testing for a
+  # prerelease before removing it reads v1.2.3+build-5 -- a stable release --
+  # as a prerelease.
+  core="${tail%%+*}"
+  case "${tail}" in
+    *+*)
+      build="${tail#*+}"
+      [ -n "${build}" ] || die "release tag '${ref}' ends in '+' with no build metadata"
+      ;;
+  esac
+
+  case "${core}" in
+    *-*)
+      pre="${core#*-}"
+      [ -n "${pre}" ] || die "release tag '${ref}' ends in '-' with no prerelease identifier"
+      ;;
+  esac
+
+  local patch="${core%%-*}"
+
+  for part in "${major}" "${minor}" "${patch}"; do
+    case "${part}" in
+      "" | *[!0-9]*) die "release tag '${ref}' has a non-numeric version component" ;;
+      # Semver forbids leading zeros, and tolerating them would make v01.2.3 and
+      # v1.2.3 two tags naming one version.
+      0[0-9]*) die "release tag '${ref}' has a version component with a leading zero" ;;
+    esac
+  done
+
+  printf '%s\n' "${bare}"
+}
+
+# release_tag_is_prerelease prints "true" when the tag carries a prerelease
+# suffix. A release candidate must not move a floating tag or publish a package
+# users install by default, and the workflow needs a single answer to that.
+#
+# Build metadata is removed before the test for the reason above: the "-" in
+# v1.2.3+build-5 belongs to the build metadata, not to a prerelease.
+release_tag_is_prerelease() {
+  local core="${1#v}"
+  core="${core%%+*}"
+  case "${core}" in
+    *-*) printf 'true\n' ;;
+    *) printf 'false\n' ;;
+  esac
+}
+
 main() {
   local command="${1-}"
   [ -n "${command}" ] || usage
@@ -228,6 +312,15 @@ main() {
     ko-flags)
       [ "$#" = "1" ] || usage
       validate_ko_flags "$1"
+      ;;
+    release-tag)
+      [ "$#" = "1" ] || usage
+      validate_release_tag "$1"
+      ;;
+    release-tag-prerelease)
+      [ "$#" = "1" ] || usage
+      validate_release_tag "$1" >/dev/null
+      release_tag_is_prerelease "$1"
       ;;
     *) usage ;;
   esac

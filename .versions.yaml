@@ -18,6 +18,9 @@ tools:
   crane: v0.22.1
   syft: v1.51.1
 
+  # Go binary releases. Consumed by the release-go reusable workflow.
+  goreleaser: v2.18.1
+
   # Cosign must stay >= v3.1.0. Earlier releases log DSSE attestations to Rekor
   # as the legacy "dsse" entry type, which sigstore-go cannot verify; from v3.1.0
   # they are logged to Rekor v2 as hashedrekord/PAE.

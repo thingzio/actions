@@ -1,7 +1,8 @@
 # SLSA Build Level 3
 
-Images built by `build-ko.yaml` and `build-docker.yaml` meet
-[SLSA v1.0](https://slsa.dev/spec/v1.0/levels) **Build Level 3**.
+Artifacts built by `build-ko.yaml`, `build-docker.yaml` and `release-go.yaml`
+meet [SLSA v1.0](https://slsa.dev/spec/v1.0/levels) **Build Level 3** — images
+for the first two, Go binaries for the third.
 
 This page explains why that is true, what it does and does not promise, and
 what would silently drop you back to Level 2.
@@ -34,6 +35,18 @@ gh attestation verify oci://ghcr.io/thingzio/my-app:v1.2.3 \
   --signer-workflow thingzio/actions/.github/workflows/build-ko.yaml
 ```
 
+The same command shape verifies a binary, naming the workflow that built it:
+
+```bash
+gh attestation verify my-app_1.2.3_linux_amd64.tar.gz \
+  --repo thingzio/my-app \
+  --signer-workflow thingzio/actions/.github/workflows/release-go.yaml
+```
+
+Dropping `--signer-workflow` is what silently reduces either check to Level 2:
+without it, provenance signed by *any* workflow in the repository passes,
+including one an attacker added.
+
 For completeness, the other identity extensions Fulcio records:
 
 | Extension | OID | Value |
@@ -62,6 +75,31 @@ isolated" would stop being true.
 **Only `linux/amd64` and `linux/arm64` are supported.** Adding a platform means
 adding a runner mapping, deliberately.
 
+## Why `release-go.yaml` needs three jobs to say the same thing
+
+ko and buildx execute no caller configuration, so `build-ko.yaml` and
+`build-docker.yaml` can build and attest in one job. goreleaser does: a
+`.goreleaser.yaml` carries `before.hooks`, `builds.hooks` and `signs.cmd`, all
+arbitrary shell, all authored by the caller. A caller's hook running beside the
+OIDC token could take it and mint provenance naming this workflow as the builder
+for bytes this workflow never produced — Level 3's defining forgery.
+
+So `release-go.yaml` splits the work by what each job may touch. `build` runs
+goreleaser and its hooks and holds **no** `id-token`. `attest` holds the signing
+identity and runs no caller code at all. Only the checksum file crosses between
+them, and `attest` re-derives every digest in it from the artifacts actually on
+the release before signing, because a file written by the caller's build is not
+evidence about the caller's build.
+
+Two consequences worth knowing:
+
+- **There is no `args` input**, for the same reason there is no `build_command`
+  in the image workflows. Arbitrary goreleaser flags are caller-supplied shell
+  in the build definition.
+- **The caller's `.goreleaser.yaml` is checked before goreleaser runs**, because
+  several of the properties this page claims depend on it — see
+  [`release-go.md`](../.github/workflows/release-go.md).
+
 ## What breaks the level
 
 | If you… | Result |
@@ -70,6 +108,8 @@ adding a runner mapping, deliberately.
 | Run the workflows on a self-hosted runner via a fork of this repository | Not Level 3 unless that runner is genuinely ephemeral and isolated. |
 | Add an input that reaches a shell | Level 2, silently. This is the failure mode to guard in review. |
 | Rename a reusable workflow file | Existing verification commands stop matching — the filename is part of the certificate identity. Treat as a breaking change. |
+| Verify without `--signer-workflow` | Level 2 in practice. Any workflow in the repository passes, which is the thing Level 3 exists to distinguish. |
+| Give `release-go.yaml`'s `build` job an `id-token` | Level 2, and worse: caller hooks would run beside a signing identity. |
 
 ## What Build Level 3 does *not* mean
 
@@ -98,6 +138,12 @@ tags; a failed attestation never leaves a published `latest` at all.
 Timestamps in image labels and layer metadata mean a rebuild from the same
 commit is not guaranteed to yield an identical digest. SLSA does not require
 that at Build L3.
+
+Binaries are closer, because goreleaser's `mod_timestamp: '{{ .CommitTimestamp }}'`
+and `-trimpath` remove the two usual sources of drift, but this is the caller's
+configuration rather than something `release-go.yaml` enforces, and the archive
+still records a build time. Treat bit-for-bit reproducibility as a property you
+verify, not one the level gives you.
 
 ## References
 

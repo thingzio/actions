@@ -131,6 +131,39 @@ jobs:
     with:
       working_directory: testdata/go-app
 
+  # Exercises release-go without cutting a release: a snapshot build that signs,
+  # attests and publishes nothing.
+  #
+  # What this covers: tool installation, version resolution, the goreleaser
+  # configuration check, the goreleaser invocation itself, and the requirement
+  # that it produce a checksum file.
+  #
+  # What it does NOT cover, and cannot: everything in the attest and publish
+  # jobs -- cosign signing, the identity self-check, the checksums-describe-the-
+  # release check, provenance attestation, and the draft flip. Those need an
+  # OIDC identity and a real GitHub release, so they are first exercised by a
+  # real release. The logic inside them lives in scripts/verify-checksums.sh and
+  # scripts/check-goreleaser-config.sh precisely so the test suite can reach it
+  # without a runner; the glue holding those scripts together is not covered.
+  #
+  # The permissions below are wider than a dry run uses, and have to be: a
+  # caller must grant every permission any job in the called workflow declares,
+  # whether or not that job ends up running. attest and publish are skipped
+  # entirely here, so nothing mints an OIDC token -- and job-level permissions
+  # in a called workflow replace the caller's rather than adding to them, so the
+  # build job still receives contents: write and nothing else.
+  release-go:
+    name: release-go
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-go.yaml
+    with:
+      working_directory: testdata/go-app
+      go_version_file: go.mod
+      dry_run: true
+
   verify:
     # Named from matrix.name alone, deliberately. A matrix job whose `name` does
     # not reference the matrix gets the whole matrix appended to its check name
