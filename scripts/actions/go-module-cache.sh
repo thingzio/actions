@@ -40,35 +40,10 @@ set -euo pipefail
 : "${CHECKOUT_DIR:=src}"
 : "${WORKING_DIRECTORY:=.}"
 
-# Collapse the "current directory" spellings to nothing, and strip a leading
-# "./" from anything else, so "." "./" "" all mean the root and "./api" and
-# "api" mean the same subdirectory. Applied to both halves of the join, because
-# a caller that checks its source out at the workspace root passes
-# CHECKOUT_DIR=".", and "." on the left of the join is the same bug as "." on
-# the right.
-normalize_dir() {
-  local dir="$1"
-  case "${dir}" in
-    '' | '.' | './') printf '' ;;
-    *)
-      dir="${dir#./}"
-      # A trailing slash would produce "src/api//go.sum".
-      printf '%s' "${dir%/}"
-      ;;
-  esac
-}
-
-# join_path composes the non-empty segments, so no "." or "//" can survive.
-join_path() {
-  local head="$1" tail="$2"
-  if [ -z "${head}" ]; then
-    printf '%s' "${tail}"
-  elif [ -z "${tail}" ]; then
-    printf '%s' "${head}"
-  else
-    printf '%s/%s' "${head}" "${tail}"
-  fi
-}
+# normalize_dir and join_path come from scripts/lib/common.sh. They are applied
+# to both halves of the join, because a caller that checks its source out at
+# the workspace root passes CHECKOUT_DIR=".", and "." on the left of the join
+# is the same bug as "." on the right.
 
 main() {
   local checkout workdir prefix dir lock

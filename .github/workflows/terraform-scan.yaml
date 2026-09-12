@@ -1,0 +1,103 @@
+name: Terraform scan
+
+# Scans Terraform for misconfigurations with Trivy and fails the job when a
+# finding meets the severity threshold.
+#
+# Trivy rather than tfsec. tfsec is end of life -- its final release was
+# v1.28.14 in May 2025, and the project's own description now reads "Tfsec is
+# now part of Trivy". Its ruleset is frozen, so a repository still running it
+# is scanning against whatever was known in 2025 and will never learn anything
+# new.
+#
+# Like the build workflows, no input here becomes shell: severity is checked
+# against a closed allowlist, and the scan target is passed through `env:` and
+# quoted, never interpolated into a `run:` block.
+#
+# Usage:
+#
+#   jobs:
+#     terraform:
+#       permissions:
+#         contents: read
+#       uses: thingzio/actions/.github/workflows/terraform-scan.yaml@<sha>  # v1.2.0
+#       with:
+#         working_directory: infra/run
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory to scan, relative to the repository root
+        required: false
+        type: string
+        default: '.'
+      severity:
+        description: >-
+          Comma-separated severities that fail the job. One or more of
+          UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL.
+        required: false
+        type: string
+        default: HIGH,CRITICAL
+      exit_code:
+        description: >-
+          Exit code when a finding meets the threshold. Set to 0 to report
+          without failing, which is how to adopt this on a repository with a
+          known backlog.
+        required: false
+        type: number
+        default: 1
+      trivy_version:
+        description: Override the pinned Trivy version
+        required: false
+        type: string
+        default: ''
+    outputs:
+      findings:
+        description: Number of findings at or above the severity threshold
+        value: ${{ jobs.scan.outputs.findings }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      findings: ${{ steps.scan.outputs.findings }}
+    steps:
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Checkout the scan definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.builder/.github/actions/load-versions
+
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: ${{ inputs.trivy_version != '' && inputs.trivy_version || steps.versions.outputs.trivy }}
+        run: .builder/scripts/install-tool.sh trivy "${TRIVY_VERSION}" "${RUNNER_TEMP}/bin"
+
+      - name: Scan
+        id: scan
+        env:
+          CHECKOUT_DIR: src
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          SEVERITY: ${{ inputs.severity }}
+          EXIT_CODE: ${{ inputs.exit_code }}
+          TRIVY_BIN: ${{ runner.temp }}/bin/trivy
+        run: .builder/scripts/actions/terraform-scan.sh

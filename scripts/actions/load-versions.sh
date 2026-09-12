@@ -13,6 +13,7 @@ tools.ko
 tools.crane
 tools.syft
 tools.cosign
+tools.trivy
 tools.actionlint
 tools.yamllint
 tools.shellcheck

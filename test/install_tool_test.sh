@@ -65,6 +65,30 @@ test_crane_darwin_asset_names() {
   assert_contains "${RUN_OUT}" "go-containerregistry_Darwin_arm64.tar.gz"
 }
 
+# Trivy names its archives after neither GOARCH nor goreleaser's convention:
+# "macOS" rather than "Darwin", and "64bit"/"ARM64" rather than amd64/arm64.
+# Getting any of those wrong produces a 404 at install time, not a wrong binary,
+# so these assertions are the cheapest place to catch a rename.
+test_trivy_asset_names() {
+  run _describe trivy v0.74.0 linux amd64
+  assert_ok
+  assert_contains "${RUN_OUT}" "https://github.com/aquasecurity/trivy/releases/download/v0.74.0"
+  assert_contains "${RUN_OUT}" "trivy_0.74.0_Linux-64bit.tar.gz"
+  assert_contains "${RUN_OUT}" "trivy_0.74.0_checksums.txt"
+}
+
+test_trivy_linux_arm64_asset_names() {
+  run _describe trivy v0.74.0 linux arm64
+  assert_ok
+  assert_contains "${RUN_OUT}" "trivy_0.74.0_Linux-ARM64.tar.gz"
+}
+
+test_trivy_darwin_asset_names() {
+  run _describe trivy v0.74.0 darwin arm64
+  assert_ok
+  assert_contains "${RUN_OUT}" "trivy_0.74.0_macOS-ARM64.tar.gz"
+}
+
 # syft uses lowercase os/arch and a version-qualified manifest name.
 test_syft_asset_names() {
   run _describe syft v1.51.1 linux arm64
