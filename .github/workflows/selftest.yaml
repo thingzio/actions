@@ -1,0 +1,191 @@
+name: Selftest
+
+# Builds real images with the reusable workflows and verifies the attestations
+# they produce, end to end, against a real registry.
+#
+# This is the only check that can prove the product works. Linting a workflow
+# tells you it parses; it cannot tell you that cosign attached the SBOM to the
+# child manifest rather than the index, that crane resolved the platforms the
+# build claimed, or that `gh attestation verify` accepts what was signed. For a
+# repository whose entire deliverable is CI configuration, the selftest is the
+# test suite.
+#
+# It is also the safety net for version bumps: Renovate moving ko or cosign in
+# .versions.yaml lands here as a real build before it can merge.
+#
+# Fork pull requests reach the build with no write credential and no OIDC token.
+# The reusable workflows detect that and degrade to build-only, so this workflow
+# still gives external contributors real feedback; the verify jobs are skipped
+# because there is nothing signed to verify.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Version pins age even when nothing in this repository changes: a base image
+  # moves, a registry behaviour shifts, a cosign release changes a default.
+  # A weekly run finds that before a consumer's release does.
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ko:
+    name: ko
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-ko.yaml
+    with:
+      image: thingzio/actions-selftest-ko
+      working_directory: testdata/go-app
+      main: .
+      # Exercises the allowlist rather than just the happy path.
+      ko_flags: --image-user=65532
+      labels: |
+        org.opencontainers.image.title=thingzio actions selftest (ko)
+        org.opencontainers.image.description=Fixture image, not for use
+
+  docker:
+    name: docker
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      image: thingzio/actions-selftest-docker
+      context: testdata/docker-app
+      dockerfile: testdata/docker-app/Dockerfile
+      build_args: |
+        SELFTEST_MESSAGE=built by thingzio/actions selftest
+      labels: |
+        org.opencontainers.image.title=thingzio actions selftest (docker)
+        org.opencontainers.image.description=Fixture image, not for use
+
+  # Proving a single platform still produces a coherent result matters: it is
+  # the one case where the SBOM and the provenance share a subject digest, and
+  # the only path where BuildKit would otherwise wrap the result in an index.
+  docker-single-platform:
+    name: docker (single platform)
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      image: thingzio/actions-selftest-docker-amd64
+      context: testdata/docker-app
+      dockerfile: testdata/docker-app/Dockerfile
+      platforms: linux/amd64
+
+  verify:
+    name: Verify attestations
+    needs: [ko, docker, docker-single-platform]
+    # Nothing was published from a fork, so there is nothing to verify.
+    if: needs.ko.outputs.digest != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ko
+            image_ref: ${{ needs.ko.outputs.image_ref }}
+            platform_digests: ${{ needs.ko.outputs.platform_digests }}
+            signer_workflow: .github/workflows/build-ko.yaml
+          - name: docker
+            image_ref: ${{ needs.docker.outputs.image_ref }}
+            platform_digests: ${{ needs.docker.outputs.platform_digests }}
+            signer_workflow: .github/workflows/build-docker.yaml
+          - name: docker-single-platform
+            image_ref: ${{ needs.docker-single-platform.outputs.image_ref }}
+            platform_digests: ${{ needs.docker-single-platform.outputs.platform_digests }}
+            signer_workflow: .github/workflows/build-docker.yaml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.github/actions/load-versions
+
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+        with:
+          cosign: ${{ steps.versions.outputs.cosign }}
+
+      - name: Authenticate to the registry
+        uses: ./.github/actions/registry-login
+
+      # The verification contract published in the README, executed. If this
+      # fails, the documentation is wrong and consumers would find out instead.
+      - name: Verify
+        uses: ./.github/actions/verify-image
+        with:
+          image_ref: ${{ matrix.image_ref }}
+          signer_repo: ${{ github.repository }}
+          signer_workflow: ${{ matrix.signer_workflow }}
+          platform_digests: ${{ matrix.platform_digests }}
+
+  # An image the selftest built must be runnable. Catches the class of failure
+  # where everything is signed correctly and the entrypoint is broken.
+  smoke:
+    name: Run the built images
+    needs: [ko, docker]
+    if: needs.ko.outputs.digest != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to the registry
+        uses: ./.github/actions/registry-login
+
+      - name: Run the ko image
+        env:
+          IMAGE_REF: ${{ needs.ko.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          output="$(docker run --rm "${IMAGE_REF}")"
+          printf '%s\n' "${output}"
+          case "${output}" in
+            *"thingzio selftest"*) ;;
+            *) echo "::error::unexpected output from the ko image"; exit 1 ;;
+          esac
+
+      - name: Run the docker image
+        env:
+          IMAGE_REF: ${{ needs.docker.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          output="$(docker run --rm "${IMAGE_REF}")"
+          printf '%s\n' "${output}"
+          case "${output}" in
+            *"built by thingzio/actions selftest"*) ;;
+            *) echo "::error::build_args did not reach the image"; exit 1 ;;
+          esac

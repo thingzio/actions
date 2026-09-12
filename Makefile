@@ -55,8 +55,9 @@ lint-shell: ## Lint shell scripts
 		printf '  Ubuntu: apt-get install -y shellcheck (preinstalled on GitHub runners)\n'; \
 		exit 1; \
 	}
-	@shellcheck --severity=style --external-sources \
-		$$(find scripts test -name '*.sh' -type f | sort)
+	@find scripts test -name '*.sh' -type f -print0 \
+		| sort -z \
+		| xargs -0 shellcheck --severity=style --external-sources
 
 ## Tooling
 

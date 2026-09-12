@@ -1,0 +1,135 @@
+name: CI
+
+# Static checks for this repository's own code. Everything here is the same
+# command `make verify` runs locally, reading the same pinned versions from
+# .versions.yaml, so a green laptop is a green CI run.
+#
+# The behavioural proof that the workflows actually build and attest an image
+# lives in selftest.yaml; this job catches the classes of mistake that do not
+# need a registry to find.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Shell tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run tests
+        run: ./test/run.sh
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.github/actions/load-versions
+
+      - name: Install actionlint
+        run: ./scripts/install-tool.sh actionlint "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}/bin"
+        env:
+          ACTIONLINT_VERSION: ${{ steps.versions.outputs.actionlint }}
+
+      - name: Lint workflows and actions
+        run: "\"${RUNNER_TEMP}/bin/actionlint\" -color"
+
+      - name: Install yamllint
+        run: pipx install "yamllint==${YAMLLINT_VERSION}"
+        env:
+          YAMLLINT_VERSION: ${{ steps.versions.outputs.yamllint }}
+
+      - name: Lint YAML
+        run: yamllint --strict .
+
+      # ShellCheck ships preinstalled on GitHub-hosted Ubuntu runners, and its
+      # releases publish no checksum manifest to pin against, so it is the one
+      # tool this repository does not install itself.
+      - name: Lint shell
+        run: |
+          set -euo pipefail
+          find scripts test -name '*.sh' -type f -print0 |
+            sort -z |
+            xargs -0 shellcheck --severity=style --external-sources
+
+  # zizmor finds GitHub Actions-specific security issues that actionlint does
+  # not model: template-injection sinks, overbroad permissions, unpinned
+  # actions, artifact poisoning. Results go to code scanning so a regression
+  # shows up as a PR annotation rather than a buried log line.
+  zizmor:
+    name: Workflow security audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
+        with:
+          advanced-security: true
+
+  # A Go fixture that does not compile would fail the selftest with a confusing
+  # ko error. Catching it here costs seconds and names the real problem.
+  fixtures:
+    name: Test fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: testdata/go-app/go.mod
+          cache: false
+
+      - name: Vet and build the Go fixture
+        working-directory: testdata/go-app
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go build -o /dev/null ./...
+
+      - name: Check the Dockerfile fixture is digest-pinned
+        run: |
+          set -euo pipefail
+          # This repository tells every consumer to pin base images by digest.
+          # Its own fixture must not be the exception.
+          if grep -Eq '^FROM .*@sha256:[a-f0-9]{64}' testdata/docker-app/Dockerfile; then
+            echo "OK: base image is digest-pinned"
+          else
+            echo "::error::testdata/docker-app/Dockerfile must pin its base image by digest"
+            exit 1
+          fi
