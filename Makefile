@@ -15,6 +15,7 @@ export PATH := $(BIN):$(PATH)
 
 ACTIONLINT_VERSION := $(shell $(VERSIONS) tools.actionlint)
 YAMLLINT_VERSION := $(shell $(VERSIONS) tools.yamllint)
+SHELLCHECK_VERSION := $(shell $(VERSIONS) tools.shellcheck)
 
 .PHONY: help
 help: ## Show this help
@@ -48,24 +49,21 @@ lint-yaml: $(BIN)/yamllint ## Lint YAML formatting
 	@yamllint --strict .
 
 .PHONY: lint-shell
-lint-shell: ## Lint shell scripts
-	@command -v shellcheck >/dev/null 2>&1 || { \
-		printf 'shellcheck not found. Install it with:\n'; \
-		printf '  macOS:  brew install shellcheck\n'; \
-		printf '  Ubuntu: apt-get install -y shellcheck (preinstalled on GitHub runners)\n'; \
-		exit 1; \
-	}
+lint-shell: $(BIN)/shellcheck ## Lint shell scripts
 	@find scripts test -name '*.sh' -type f -print0 \
 		| sort -z \
-		| xargs -0 shellcheck --severity=style --external-sources
+		| xargs -0 $(BIN)/shellcheck --severity=style --external-sources
 
 ## Tooling
 
 .PHONY: tools
-tools: $(BIN)/actionlint $(BIN)/yamllint ## Install every pinned tool into ./.bin
+tools: $(BIN)/actionlint $(BIN)/yamllint $(BIN)/shellcheck ## Install every pinned tool into ./.bin
 
 $(BIN)/actionlint:
 	@./scripts/install-tool.sh actionlint $(ACTIONLINT_VERSION) $(BIN)
+
+$(BIN)/shellcheck:
+	@./scripts/install-tool.sh shellcheck $(SHELLCHECK_VERSION) $(BIN)
 
 # yamllint is a Python package, so it gets a dedicated virtualenv rather than a
 # `pip install --user` that would depend on the developer's global environment.
@@ -83,7 +81,8 @@ versions: ## Print every pinned version
 		syft       "$$($(VERSIONS) tools.syft)" \
 		cosign     "$$($(VERSIONS) tools.cosign)" \
 		actionlint "$$($(VERSIONS) tools.actionlint)" \
-		yamllint   "$$($(VERSIONS) tools.yamllint)"
+		yamllint   "$$($(VERSIONS) tools.yamllint)" \
+		shellcheck "$$($(VERSIONS) tools.shellcheck)"
 
 .PHONY: clean
 clean: ## Remove installed tools

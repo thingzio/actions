@@ -367,38 +367,7 @@ jobs:
           PUSH: ${{ needs.prepare.outputs.push }}
           SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
           REVISION: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          . "${GITHUB_WORKSPACE}/.builder/scripts/lib/common.sh"
-
-          require_no_newline main "${MAIN}"
-          case "${MAIN}" in
-            -*) die "main must be a package path, not a flag: '${MAIN}'" ;;
-          esac
-
-          # Built as an array so no value is ever re-split or glob-expanded.
-          args=(build "${MAIN}" --bare --platform="${PLATFORMS}" --tags="${CANDIDATE_TAG}")
-
-          args+=(--image-label="org.opencontainers.image.source=${SOURCE_URL}")
-          args+=(--image-label="org.opencontainers.image.revision=${REVISION}")
-          args+=(--image-label="org.opencontainers.image.version=${PRIMARY_TAG}")
-          args+=(--image-label="org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
-
-          while IFS= read -r label; do
-            [ -n "${label}" ] || continue
-            args+=(--image-label="${label}")
-          done <<<"${EXTRA_LABELS}"
-
-          while IFS= read -r flag; do
-            [ -n "${flag}" ] || continue
-            args+=("${flag}")
-          done <<<"${KO_FLAGS}"
-
-          if [ "${PUSH}" != "true" ]; then
-            args+=(--push=false)
-          fi
-
-          ko "${args[@]}"
+        run: "\"${GITHUB_WORKSPACE}/.builder/scripts/actions/ko-build.sh\""
 
       - name: Resolve digests
         id: digests

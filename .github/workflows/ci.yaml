@@ -65,15 +65,22 @@ jobs:
       - name: Lint YAML
         run: yamllint --strict .
 
-      # ShellCheck ships preinstalled on GitHub-hosted Ubuntu runners, and its
-      # releases publish no checksum manifest to pin against, so it is the one
-      # tool this repository does not install itself.
+      # Installed rather than taken from the runner image. ShellCheck ships
+      # preinstalled on GitHub's Ubuntu runners, and relying on that let CI and
+      # a laptop run different versions of the same linter -- which produced a
+      # green local run and a red CI run, the exact drift "local development
+      # equals CI" exists to prevent.
+      - name: Install shellcheck
+        run: ./scripts/install-tool.sh shellcheck "${SHELLCHECK_VERSION}" "${RUNNER_TEMP}/bin"
+        env:
+          SHELLCHECK_VERSION: ${{ steps.versions.outputs.shellcheck }}
+
       - name: Lint shell
         run: |
           set -euo pipefail
           find scripts test -name '*.sh' -type f -print0 |
             sort -z |
-            xargs -0 shellcheck --severity=style --external-sources
+            xargs -0 "${RUNNER_TEMP}/bin/shellcheck" --severity=style --external-sources
 
   # zizmor finds GitHub Actions-specific security issues that actionlint does
   # not model: template-injection sinks, overbroad permissions, unpinned

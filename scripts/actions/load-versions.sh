@@ -15,6 +15,7 @@ tools.syft
 tools.cosign
 tools.actionlint
 tools.yamllint
+tools.shellcheck
 images.ko_default_base
 "
 
