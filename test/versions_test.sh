@@ -114,7 +114,8 @@ test_rejects_no_arguments() {
 test_repository_versions_file_exposes_the_required_keys() {
   local key
   for key in tools.ko tools.crane tools.syft tools.cosign tools.actionlint \
-    tools.yamllint images.ko_default_base; do
+    tools.yamllint tools.shellcheck images.ko_default_base \
+    checksums.shellcheck_linux_amd64 checksums.shellcheck_darwin_arm64; do
     run "${VERSIONS_SH}" "${key}"
     assert_ok "${key} must resolve from the repository .versions.yaml" || return 1
     assert_ne "" "${RUN_OUT}" "${key} must not be empty" || return 1
