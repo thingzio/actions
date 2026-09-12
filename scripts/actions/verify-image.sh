@@ -37,17 +37,28 @@ require_digest_pinned() {
 }
 
 verify_provenance() {
+  local signer
+
   require_digest_pinned
+  require_set signer_repo "${SIGNER_REPO-}"
   require_set signer_workflow "${SIGNER_WORKFLOW-}"
-  require_no_newline signer_repo "${SIGNER_REPO-}"
+  require_no_newline signer_repo "${SIGNER_REPO}"
   require_no_newline signer_workflow "${SIGNER_WORKFLOW}"
+
+  # --signer-repo and --signer-workflow are mutually exclusive: gh rejects the
+  # combination with "if any flags in the group [...] are set none of the
+  # others can be". --signer-workflow takes [host/]<owner>/<repo>/<path>, so it
+  # already carries the repository and is the stricter of the two -- it pins
+  # the exact build definition rather than only the repository that holds it.
+  # The two inputs stay separate on the action for readability and are joined
+  # here.
+  signer="${SIGNER_REPO}/${SIGNER_WORKFLOW}"
 
   gh attestation verify "oci://${IMAGE_REF}" \
     --repo "${REPO}" \
-    --signer-repo "${SIGNER_REPO}" \
-    --signer-workflow "${SIGNER_WORKFLOW}"
+    --signer-workflow "${signer}"
 
-  notice "provenance verified for ${IMAGE_REF} (signed by ${SIGNER_REPO})"
+  notice "provenance verified for ${IMAGE_REF} (signed by ${signer})"
 }
 
 verify_sbom() {

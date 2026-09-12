@@ -182,8 +182,7 @@ After the first release:
 ```bash
 gh attestation verify oci://ghcr.io/thingzio/my-app:v1.2.3 \
   --repo thingzio/my-app \
-  --signer-repo thingzio/actions \
-  --signer-workflow .github/workflows/build-ko.yaml
+  --signer-workflow thingzio/actions/.github/workflows/build-ko.yaml
 ```
 
 Add that command to your own README so your consumers can run it. Full details,

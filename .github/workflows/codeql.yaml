@@ -36,7 +36,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions, go]
+        # `actions` only. There is no Go application in this repository -- the
+        # sole Go file is a fifteen-line fixture that prints a string, and its
+        # module has no dependencies, so a Go analysis costs minutes and finds
+        # nothing by construction. The Go extractor also rejects
+        # `build-mode: none` and would need autobuild, adding a toolchain setup
+        # for that same zero signal.
+        #
+        # Add `go` back, with `build-mode: autobuild`, the moment this
+        # repository grows a real Go program.
+        language: [actions]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
