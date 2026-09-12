@@ -7,6 +7,7 @@
 #   scripts/install-tool.sh crane      v0.22.1  /usr/local/bin
 #   scripts/install-tool.sh syft       v1.51.1  .bin
 #   scripts/install-tool.sh actionlint v1.7.12  .bin
+#   scripts/install-tool.sh trivy      v0.74.0  .bin
 #   scripts/install-tool.sh shellcheck v0.11.0  .bin
 #
 # This is the only sanctioned way to bring a binary onto a runner. There is no
@@ -32,7 +33,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/common.sh"
 
 usage() {
-  printf 'usage: %s <ko|crane|syft|actionlint|shellcheck> <version> <dest-dir>\n' "${0##*/}" >&2
+  printf 'usage: %s <ko|crane|syft|actionlint|trivy|shellcheck> <version> <dest-dir>\n' "${0##*/}" >&2
   exit 2
 }
 
@@ -51,6 +52,24 @@ goreleaser_os() {
     linux) printf 'Linux\n' ;;
     darwin) printf 'Darwin\n' ;;
     *) die "unsupported operating system: $1" ;;
+  esac
+}
+
+# Trivy uses a vocabulary of its own: "macOS" rather than "Darwin", and
+# marketing-style bit widths rather than GOARCH names.
+trivy_os() {
+  case "$1" in
+    linux) printf 'Linux\n' ;;
+    darwin) printf 'macOS\n' ;;
+    *) die "unsupported operating system: $1" ;;
+  esac
+}
+
+trivy_arch() {
+  case "$1" in
+    amd64) printf '64bit\n' ;;
+    arm64) printf 'ARM64\n' ;;
+    *) die "unsupported architecture: $1" ;;
   esac
 }
 
@@ -101,6 +120,13 @@ describe_tool() {
       BINARY="actionlint"
       ARCHIVE_PATH="actionlint"
       ;;
+    trivy)
+      BASE_URL="https://github.com/aquasecurity/trivy/releases/download/${version}"
+      ARCHIVE="trivy_${bare}_$(trivy_os "${os}")-$(trivy_arch "${arch}").tar.gz"
+      MANIFEST="trivy_${bare}_checksums.txt"
+      BINARY="trivy"
+      ARCHIVE_PATH="trivy"
+      ;;
     shellcheck)
       BASE_URL="https://github.com/koalaman/shellcheck/releases/download/${version}"
       ARCHIVE="shellcheck-${version}.${os}.$(shellcheck_arch "${arch}").tar.gz"
@@ -110,7 +136,7 @@ describe_tool() {
       ARCHIVE_PATH="shellcheck-${version}/shellcheck"
       ;;
     *)
-      die "unknown tool '${tool}'; expected one of ko, crane, syft, actionlint, shellcheck"
+      die "unknown tool '${tool}'; expected one of ko, crane, syft, actionlint, trivy, shellcheck"
       ;;
   esac
 }

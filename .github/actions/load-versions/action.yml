@@ -24,6 +24,9 @@ outputs:
       v2 as hashedrekord/PAE rather than the legacy dsse entry type, which
       sigstore-go cannot verify.
     value: ${{ steps.versions.outputs.cosign }}
+  trivy:
+    description: trivy version, e.g. v0.74.0
+    value: ${{ steps.versions.outputs.trivy }}
   actionlint:
     description: actionlint version, e.g. v1.7.12
     value: ${{ steps.versions.outputs.actionlint }}

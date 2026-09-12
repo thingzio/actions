@@ -91,6 +91,38 @@ require_set() {
   [ -n "${2-}" ] || die "${1} is required"
 }
 
+# normalize_dir collapses the "current directory" spellings to nothing and
+# strips a leading "./" and any trailing "/" from anything else, so "." "./"
+# and "" all mean the root, and "./api" "api" and "api/" are one directory.
+#
+# This exists because a caller-supplied directory of "." joined naively
+# produces "src/./go.sum" -- a spelling the shell's -f test accepts and
+# actions/cache rejects, which is how the Go module cache came to silently
+# never restore for every caller using the default.
+normalize_dir() {
+  local dir="$1"
+  case "${dir}" in
+    '' | '.' | './') printf '' ;;
+    *)
+      dir="${dir#./}"
+      printf '%s' "${dir%/}"
+      ;;
+  esac
+}
+
+# join_path composes only the non-empty segments, so no "." segment and no
+# doubled slash can survive the join.
+join_path() {
+  local head="$1" tail="$2"
+  if [ -z "${head}" ]; then
+    printf '%s' "${tail}"
+  elif [ -z "${tail}" ]; then
+    printf '%s' "${head}"
+  else
+    printf '%s/%s' "${head}" "${tail}"
+  fi
+}
+
 # emit_output appends a name=value pair to $GITHUB_OUTPUT, refusing values that
 # could forge additional outputs. Falls back to stdout when run outside Actions
 # so scripts stay testable.

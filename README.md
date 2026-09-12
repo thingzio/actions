@@ -11,7 +11,7 @@ decision, and one identity for every repository to verify against.
   the workflows do not cover.
 
 Pin to a commit SHA, or track the floating `@v1` tag. Current release:
-**[v1.0.1](https://github.com/thingzio/actions/releases/latest)**.
+**[v1.1.0](https://github.com/thingzio/actions/releases/latest)**.
 
 ---
 
@@ -22,13 +22,15 @@ Pin to a commit SHA, or track the floating `@v1` tag. Current release:
 | [`build-ko.yaml`](.github/workflows/build-ko.yaml) | Builds a **Go** repository into a multi-platform, signed, SBOM-attested container image with ko. No Dockerfile; arm64 is cross-compiled rather than emulated. | [docs](.github/workflows/build-ko.md) |
 | [`build-docker.yaml`](.github/workflows/build-docker.yaml) | Builds a **Dockerfile** into a multi-platform, signed, SBOM-attested container image on native per-architecture runners. | [docs](.github/workflows/build-docker.md) |
 | [`codeql-go.yaml`](.github/workflows/codeql-go.yaml) | Runs **CodeQL** over a Go repository and uploads the results to the caller's security tab. Builds explicitly, detects vendoring, and skips private repositories so it cannot start GHAS billing by surprise. | [docs](.github/workflows/codeql-go.md) |
+| [`terraform-scan.yaml`](.github/workflows/terraform-scan.yaml) | Scans **Terraform** for misconfigurations with Trivy, failing on a severity threshold. Replaces tfsec, which is end of life and whose ruleset is frozen. | [docs](.github/workflows/terraform-scan.md) |
 
 Use `build-ko` whenever the answer is "a Go binary in a minimal base image";
 use `build-docker` when the image needs system packages, a non-Go runtime, or
 multiple build stages.
 
 Both build workflows reach **SLSA v1.0 Build Level 3** — see
-[SLSA](docs/slsa.md). `codeql-go` signs nothing and publishes no artifact, so
+[SLSA](docs/slsa.md). `codeql-go` and `terraform-scan` sign nothing and
+publish no artifact, so
 the level does not apply to it; the no-caller-supplied-code rule below still
 does.
 
