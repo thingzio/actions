@@ -1,0 +1,118 @@
+name: SBOM and attest
+description: >-
+  Generates a CycloneDX SBOM per platform, attests each one to its own child
+  manifest with keyless Cosign, and attaches SLSA build provenance to the index.
+
+# Subject policy, and the reasoning behind it:
+#
+#   CycloneDX SBOM -> the PER-PLATFORM child manifest. An SBOM describes exactly
+#       one root filesystem. Attaching both platform SBOMs to the shared index
+#       digest makes them indistinguishable in a referrers listing, because a
+#       referrer descriptor carries only digest, mediaType, size, artifactType
+#       and annotations -- no name. A consumer that resolved linux/amd64
+#       enumerates referrers on that child manifest, so an SBOM parked on the
+#       index is invisible from the vantage point that matters.
+#
+#   Provenance -> the INDEX digest. It describes the build that produced the
+#       whole release image, not one architecture of it.
+#
+# --new-bundle-format=true is set explicitly rather than left to the installed
+# cosign's default. It is what publishes the attestation through the OCI
+# referrers API instead of a legacy `.att` tag, and that must be this
+# repository's decision, not an inherited default that can move between cosign
+# releases.
+#
+# ghcr.io does not implement the OCI 1.1 /v2/<name>/referrers/<digest> endpoint
+# (it answers 404 MANIFEST_UNKNOWN), so every attestation lands through the
+# spec's referrers tag fallback, sha256-<hex>. That is transparent to cosign and
+# oras clients, and is why the documented retrieval commands use those tools
+# rather than a raw referrers API call.
+
+inputs:
+  image:
+    description: Full image name including registry, without tag or digest
+    required: true
+  index_digest:
+    description: Index digest; subject for build provenance
+    required: true
+  platform_digests:
+    description: JSON object mapping platform to child manifest digest
+    required: true
+  sbom:
+    description: Generate and attest CycloneDX SBOMs
+    required: false
+    default: 'true'
+  provenance:
+    description: Attach SLSA build provenance to the index
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Generate and attest SBOMs
+      if: inputs.sbom == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        PLATFORM_DIGESTS: ${{ inputs.platform_digests }}
+      run: |
+        set -euo pipefail
+        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        # shellcheck source=scripts/lib/common.sh
+        . "${root}/scripts/lib/common.sh"
+
+        require_set image "${IMAGE}"
+        require_no_newline image "${IMAGE}"
+
+        outdir="${RUNNER_TEMP}/thingz-sbom"
+        mkdir -p "${outdir}"
+
+        # A filename derived from the image path, flattened so it is safe on any
+        # filesystem and in an artifact name.
+        safe="$(printf '%s' "${IMAGE}" | tr -c 'A-Za-z0-9._-' '-')"
+
+        while IFS=$'\t' read -r platform digest; do
+          [ -n "${platform}" ] || continue
+          arch="$(printf '%s' "${platform}" | tr '/' '-')"
+          file="${outdir}/sbom-${safe}-${arch}.cdx.json"
+
+          # The child manifest digest is passed directly, so syft scans exactly
+          # one root filesystem and no --platform disambiguation is needed.
+          timeout --foreground 300s syft scan \
+            "registry:${IMAGE}@${digest}" \
+            --output "cyclonedx-json=${file}"
+
+          "${root}/scripts/validate-digests.sh" sbom "${file}"
+
+          timeout --foreground 120s cosign attest \
+            --yes \
+            --new-bundle-format=true \
+            --type cyclonedx \
+            --predicate "${file}" \
+            "${IMAGE}@${digest}"
+
+          printf '::notice::attested CycloneDX SBOM for %s to %s\n' "${platform}" "${digest}"
+        done <<<"$(printf '%s' "${PLATFORM_DIGESTS}" |
+          jq -r 'to_entries[] | "\(.key)\t\(.value)"')"
+
+    - name: Upload SBOMs
+      if: inputs.sbom == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: sbom-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/thingz-sbom/*.cdx.json
+        if-no-files-found: error
+        retention-days: 30
+
+    # This is the step that makes the SLSA Build Level 3 claim real, and it only
+    # counts because it runs inside a reusable workflow: the caller cannot add a
+    # step beside it, so the provenance names a build definition the caller does
+    # not control. Called from a caller-owned workflow, the same step is Level 2.
+    - name: Attest build provenance
+      if: inputs.provenance == 'true'
+      uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f  # v3.2.0
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ inputs.index_digest }}
+        push-to-registry: true

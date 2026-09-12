@@ -1,0 +1,430 @@
+name: Build image (ko)
+
+# Builds a Go repository into a multi-platform container image with ko, attests
+# a CycloneDX SBOM to each platform manifest, and attaches SLSA build provenance
+# to the index.
+#
+# THIS FILE IS A TRUSTED BUILD DEFINITION.
+#
+# The SLSA Build Level 3 claim rests entirely on a caller being unable to alter
+# what runs here. Two rules follow, and neither is negotiable:
+#
+#   1. No input may become shell. There is no build_command, no pre_build_script,
+#      no post_steps. Such an input would let a caller run code beside the OIDC
+#      token and forge provenance naming this workflow as the builder, which
+#      collapses Level 3 to Level 2. ko_flags is a closed allowlist for the same
+#      reason.
+#
+#   2. runs-on is not caller-controlled. Platforms map to runner labels through
+#      an allowlist in scripts/validate-inputs.sh. A caller who could name a
+#      runner could point this build at a machine they control, which defeats the
+#      isolation the level rests on.
+#
+# ko cross-compiles Go natively, so a multi-platform index comes out of one job
+# with no QEMU and no manifest merge. That is why this workflow has no build
+# matrix and build-docker.yaml does.
+#
+# Usage:
+#
+#   jobs:
+#     release:
+#       permissions:
+#         contents: read
+#         packages: write
+#         id-token: write
+#         attestations: write
+#       uses: thingzio/actions/.github/workflows/build-ko.yaml@<sha>  # v1.0.0
+#       with:
+#         image: thingzio/my-app
+#         main: ./cmd/my-app
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Repository path without the registry host, tag or digest, e.g.
+          thingzio/my-app. A value carrying a registry host is accepted only
+          when that host matches the registry input.
+        required: true
+        type: string
+      registry:
+        description: Registry host to publish to
+        required: false
+        type: string
+        default: ghcr.io
+      main:
+        description: Go main package path, e.g. ./cmd/my-app
+        required: false
+        type: string
+        default: '.'
+      working_directory:
+        description: Directory within the repository containing the Go module
+        required: false
+        type: string
+        default: '.'
+      go_version:
+        description: Go version; empty reads the repository's go.mod
+        required: false
+        type: string
+        default: ''
+      base_image:
+        description: >-
+          Base image for ko. Empty uses the repository's .ko.yaml when present,
+          otherwise the org default from .versions.yaml.
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: Comma-separated platforms; linux/amd64 and linux/arm64 are supported
+        required: false
+        type: string
+        default: linux/amd64,linux/arm64
+      tags:
+        description: Newline- or comma-separated tags replacing the derived set
+        required: false
+        type: string
+        default: ''
+      labels:
+        description: Additional OCI labels, one key=value per line
+        required: false
+        type: string
+        default: ''
+      ko_flags:
+        description: >-
+          Extra ko flags. Allowlisted: --image-user=<uid>,
+          --image-annotation=<k>=<v>, --disable-optimizations, --debug.
+        required: false
+        type: string
+        default: ''
+      push:
+        description: >-
+          Publish the image. Forced to false on pull requests from forks, which
+          have no write credential and no OIDC token.
+        required: false
+        type: boolean
+        default: true
+      sbom:
+        description: Generate and attest a CycloneDX SBOM per platform
+        required: false
+        type: boolean
+        default: true
+      provenance:
+        description: Attach SLSA build provenance to the index digest
+        required: false
+        type: boolean
+        default: true
+      ko_version:
+        description: Override the pinned ko version
+        required: false
+        type: string
+        default: ''
+      cosign_version:
+        description: Override the pinned cosign version
+        required: false
+        type: string
+        default: ''
+      syft_version:
+        description: Override the pinned syft version
+        required: false
+        type: string
+        default: ''
+      crane_version:
+        description: Override the pinned crane version
+        required: false
+        type: string
+        default: ''
+    secrets:
+      registry_username:
+        description: Registry username; omit for ghcr.io
+        required: false
+      registry_password:
+        description: Registry password or token; omit for ghcr.io
+        required: false
+    outputs:
+      digest:
+        description: Index digest of the published image
+        value: ${{ jobs.publish.outputs.digest }}
+      image_ref:
+        description: Immutable <registry>/<image>@<digest> reference
+        value: ${{ jobs.publish.outputs.image_ref }}
+      tags:
+        description: Newline-separated tags that were published
+        value: ${{ jobs.prepare.outputs.tags }}
+      platform_digests:
+        description: JSON object mapping platform to child manifest digest
+        value: ${{ jobs.publish.outputs.platform_digests }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.inputs.outputs.image }}
+      platforms: ${{ steps.inputs.outputs.platforms }}
+      labels: ${{ steps.inputs.outputs.labels }}
+      ko_flags: ${{ steps.inputs.outputs.ko_flags }}
+      push: ${{ steps.inputs.outputs.push }}
+      tags: ${{ steps.tags.outputs.tags }}
+      primary_tag: ${{ steps.tags.outputs.primary_tag }}
+      candidate_tag: ${{ steps.tags.outputs.candidate_tag }}
+      ko: ${{ inputs.ko_version != '' && inputs.ko_version || steps.versions.outputs.ko }}
+      crane: ${{ inputs.crane_version != '' && inputs.crane_version || steps.versions.outputs.crane }}
+      syft: ${{ inputs.syft_version != '' && inputs.syft_version || steps.versions.outputs.syft }}
+      cosign: ${{ inputs.cosign_version != '' && inputs.cosign_version || steps.versions.outputs.cosign }}
+      base_image: ${{ inputs.base_image != '' && inputs.base_image || steps.versions.outputs.ko_default_base }}
+    steps:
+      # The build definition checks itself out. Inside a reusable workflow a
+      # relative `uses: ./...` resolves against the CALLER's checkout, so the
+      # only way to reach this repository's own composite actions is to fetch
+      # them explicitly. job.workflow_repository and job.workflow_sha name the
+      # workflow file that defines this job, which is this file, at the exact
+      # commit that is running -- so the workflow and its actions can never
+      # version-skew even when a caller pins the moving @v1 tag.
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.builder/.github/actions/load-versions
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          INPUT_LABELS: ${{ inputs.labels }}
+          INPUT_KO_FLAGS: ${{ inputs.ko_flags }}
+          INPUT_PUSH: ${{ inputs.push }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          . .builder/scripts/lib/common.sh
+
+          image="$(.builder/scripts/validate-inputs.sh image "${INPUT_REGISTRY}" "${INPUT_IMAGE}")"
+          platforms="$(.builder/scripts/validate-inputs.sh platforms "${INPUT_PLATFORMS}")"
+          labels="$(.builder/scripts/validate-inputs.sh kv labels "${INPUT_LABELS}")"
+          ko_flags="$(.builder/scripts/validate-inputs.sh ko-flags "${INPUT_KO_FLAGS}")"
+
+          # A fork pull request gets a read-only token and no OIDC token, so a
+          # push or a signature is impossible by construction. Degrading here
+          # with an explanation beats letting the first registry write fail with
+          # an opaque 403: the contributor still gets a real build, and no
+          # credential is exposed to do it.
+          push="${INPUT_PUSH}"
+          if [ "${push}" = "true" ] && [ "${IS_FORK_PR}" = "true" ]; then
+            push=false
+            notice "pull request from a fork: building without publishing, signing or attesting"
+            {
+              printf '> **Fork pull request** — the image is built and validated,\n'
+              printf '> but not published, signed or attested.\n'
+            } >>"${GITHUB_STEP_SUMMARY}"
+          fi
+
+          emit_output image "${image}"
+          emit_output platforms "${platforms}"
+          emit_output push "${push}"
+          emit_multiline_output labels "${labels}"
+          emit_multiline_output ko_flags "${ko_flags}"
+
+      - name: Derive tags
+        id: tags
+        uses: ./.builder/.github/actions/image-tags
+        with:
+          tags: ${{ inputs.tags }}
+
+  publish:
+    name: Build and attest
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    concurrency:
+      group: build-ko-${{ github.repository }}-${{ needs.prepare.outputs.image }}-${{ github.ref }}
+      cancel-in-progress: false
+    outputs:
+      digest: ${{ steps.digests.outputs.index_digest }}
+      image_ref: ${{ steps.digests.outputs.image_ref }}
+      platform_digests: ${{ steps.digests.outputs.platform_digests }}
+    steps:
+      # The caller's source goes in src/ and this repository in .builder/, so
+      # neither can ever be mistaken for the other and nothing from the build
+      # definition can leak into the built image.
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      # setup-go fails outright when module caching is on and it cannot find a
+      # lock file, and a module with no third-party dependencies legitimately
+      # has no go.sum. Decide before asking rather than failing the build over
+      # a cache.
+      - name: Detect the Go dependency lock file
+        id: golock
+        env:
+          WORKDIR: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          if [ -f "src/${WORKDIR}/go.sum" ]; then
+            printf 'cache=true\n' >>"${GITHUB_OUTPUT}"
+            printf 'path=src/%s/go.sum\n' "${WORKDIR}" >>"${GITHUB_OUTPUT}"
+          else
+            printf 'cache=false\n' >>"${GITHUB_OUTPUT}"
+            printf 'path=\n' >>"${GITHUB_OUTPUT}"
+            printf '::notice::no go.sum found; building without the module cache\n'
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: ${{ inputs.go_version }}
+          go-version-file: ${{ inputs.go_version == '' && format('src/{0}/go.mod', inputs.working_directory) || '' }}
+          cache: ${{ steps.golock.outputs.cache == 'true' }}
+          cache-dependency-path: ${{ steps.golock.outputs.path }}
+
+      - name: Setup build tools
+        uses: ./.builder/.github/actions/setup-build-tools
+        with:
+          ko: ${{ needs.prepare.outputs.ko }}
+          crane: ${{ needs.prepare.outputs.crane }}
+          syft: ${{ needs.prepare.outputs.syft }}
+          cosign: ${{ needs.prepare.outputs.cosign }}
+
+      - name: Authenticate to the registry
+        if: needs.prepare.outputs.push == 'true'
+        uses: ./.builder/.github/actions/registry-login
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      - name: Configure the base image
+        id: kobase
+        env:
+          INPUT_BASE_IMAGE: ${{ inputs.base_image }}
+          DEFAULT_BASE_IMAGE: ${{ needs.prepare.outputs.base_image }}
+          WORKDIR: ${{ inputs.working_directory }}
+        run: |
+          set -euo pipefail
+          . .builder/scripts/lib/common.sh
+
+          require_no_newline base_image "${INPUT_BASE_IMAGE}"
+
+          # Precedence: an explicit input wins, then the repository's own
+          # .ko.yaml, then the organization default. A repository that has
+          # deliberately pinned a base must not have it silently replaced.
+          if [ -n "${INPUT_BASE_IMAGE}" ]; then
+            base="${INPUT_BASE_IMAGE}"
+          elif [ -f "src/${WORKDIR}/.ko.yaml" ]; then
+            log "using the repository's own .ko.yaml"
+            exit 0
+          else
+            base="${DEFAULT_BASE_IMAGE}"
+          fi
+
+          config_dir="${RUNNER_TEMP}/ko-config"
+          mkdir -p "${config_dir}"
+          printf 'defaultBaseImage: %s\n' "${base}" >"${config_dir}/.ko.yaml"
+          printf 'KO_CONFIG_PATH=%s\n' "${config_dir}" >>"${GITHUB_ENV}"
+          log "base image: ${base}"
+
+      - name: Build
+        id: build
+        working-directory: src/${{ inputs.working_directory }}
+        env:
+          KO_DOCKER_REPO: ${{ needs.prepare.outputs.image }}
+          MAIN: ${{ inputs.main }}
+          PLATFORMS: ${{ inputs.platforms }}
+          CANDIDATE_TAG: ${{ needs.prepare.outputs.candidate_tag }}
+          PRIMARY_TAG: ${{ needs.prepare.outputs.primary_tag }}
+          EXTRA_LABELS: ${{ needs.prepare.outputs.labels }}
+          KO_FLAGS: ${{ needs.prepare.outputs.ko_flags }}
+          PUSH: ${{ needs.prepare.outputs.push }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          . "${GITHUB_WORKSPACE}/.builder/scripts/lib/common.sh"
+
+          require_no_newline main "${MAIN}"
+          case "${MAIN}" in
+            -*) die "main must be a package path, not a flag: '${MAIN}'" ;;
+          esac
+
+          # Built as an array so no value is ever re-split or glob-expanded.
+          args=(build "${MAIN}" --bare --platform="${PLATFORMS}" --tags="${CANDIDATE_TAG}")
+
+          args+=(--image-label="org.opencontainers.image.source=${SOURCE_URL}")
+          args+=(--image-label="org.opencontainers.image.revision=${REVISION}")
+          args+=(--image-label="org.opencontainers.image.version=${PRIMARY_TAG}")
+          args+=(--image-label="org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+
+          while IFS= read -r label; do
+            [ -n "${label}" ] || continue
+            args+=(--image-label="${label}")
+          done <<<"${EXTRA_LABELS}"
+
+          while IFS= read -r flag; do
+            [ -n "${flag}" ] || continue
+            args+=("${flag}")
+          done <<<"${KO_FLAGS}"
+
+          if [ "${PUSH}" != "true" ]; then
+            args+=(--push=false)
+          fi
+
+          ko "${args[@]}"
+
+      - name: Resolve digests
+        id: digests
+        if: needs.prepare.outputs.push == 'true'
+        uses: ./.builder/.github/actions/resolve-digests
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          tag: ${{ needs.prepare.outputs.candidate_tag }}
+          platforms: ${{ needs.prepare.outputs.platforms }}
+
+      - name: Generate SBOMs and attest
+        if: needs.prepare.outputs.push == 'true'
+        uses: ./.builder/.github/actions/sbom-attest
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          index_digest: ${{ steps.digests.outputs.index_digest }}
+          platform_digests: ${{ steps.digests.outputs.platform_digests }}
+          sbom: ${{ inputs.sbom }}
+          provenance: ${{ inputs.provenance }}
+
+      # Last, and only now: the release tags move onto a digest whose
+      # attestations are already published.
+      - name: Promote tags
+        if: needs.prepare.outputs.push == 'true'
+        uses: ./.builder/.github/actions/promote-tags
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          digest: ${{ steps.digests.outputs.index_digest }}
+          tags: ${{ needs.prepare.outputs.tags }}

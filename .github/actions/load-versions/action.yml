@@ -1,0 +1,58 @@
+name: Load versions
+description: >-
+  Reads the pinned tool versions from .versions.yaml and exposes them as step
+  outputs, so nothing in a workflow hardcodes a version.
+
+# Resolving versions through this action rather than inline is what makes
+# .versions.yaml the single source of truth: `make lint` on a laptop and the
+# `ci` workflow install the same actionlint, and a bump is one PR that the
+# selftest workflow proves before it merges.
+
+outputs:
+  ko:
+    description: ko version, e.g. v0.19.1
+    value: ${{ steps.versions.outputs.ko }}
+  crane:
+    description: crane version, e.g. v0.22.1
+    value: ${{ steps.versions.outputs.crane }}
+  syft:
+    description: syft version, e.g. v1.51.1
+    value: ${{ steps.versions.outputs.syft }}
+  cosign:
+    description: >-
+      cosign version. Pinned >= v3.1.0 so DSSE attestations are logged to Rekor
+      v2 as hashedrekord/PAE rather than the legacy dsse entry type, which
+      sigstore-go cannot verify.
+    value: ${{ steps.versions.outputs.cosign }}
+  actionlint:
+    description: actionlint version, e.g. v1.7.12
+    value: ${{ steps.versions.outputs.actionlint }}
+  yamllint:
+    description: yamllint version, e.g. 1.38.0
+    value: ${{ steps.versions.outputs.yamllint }}
+  ko_default_base:
+    description: Default base image for ko builds
+    value: ${{ steps.versions.outputs.ko_default_base }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read .versions.yaml
+      id: versions
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # GITHUB_ACTION_PATH is <checkout>/.github/actions/load-versions whether
+        # this action was reached through a local path or as
+        # thingzio/actions/.github/actions/load-versions@<ref>, so three levels
+        # up is the repository root in both cases.
+        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+
+        for key in tools.ko tools.crane tools.syft tools.cosign \
+          tools.actionlint tools.yamllint images.ko_default_base; do
+          name="${key#*.}"
+          value="$("${root}/scripts/versions.sh" "${key}" "${root}/.versions.yaml")"
+          printf '%s=%s\n' "${name}" "${value}" >>"${GITHUB_OUTPUT}"
+          printf '%-16s %s\n' "${name}" "${value}"
+        done

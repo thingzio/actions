@@ -1,0 +1,109 @@
+name: Resolve digests
+description: >-
+  Resolves the index digest and each per-platform child manifest digest for a
+  pushed tag, and fails closed if the result is not the shape the build claimed.
+
+# `crane digest <ref>` returns the multi-platform index digest, which is the
+# right subject for provenance and the wrong one for an SBOM: an SBOM describes
+# exactly one root filesystem, and a consumer that resolved linux/amd64
+# enumerates referrers on that child manifest, not on the index.
+#
+# `crane digest --platform` resolves the index to a child and errors if the
+# platform is absent, so a release that silently lost an architecture fails here
+# rather than shipping two SBOMs pinned to the same subject.
+
+inputs:
+  image:
+    description: Full image name including registry, without tag or digest
+    required: true
+  tag:
+    description: Tag to resolve, normally the candidate tag
+    required: true
+  platforms:
+    description: JSON array of {platform, arch, runner} from validate-inputs
+    required: true
+
+outputs:
+  index_digest:
+    description: >-
+      Digest of the multi-platform index, or of the single manifest when only
+      one platform was built. Subject for build provenance.
+    value: ${{ steps.resolve.outputs.index_digest }}
+  platform_digests:
+    description: >-
+      JSON object mapping each platform to its child manifest digest. Subjects
+      for the per-platform CycloneDX attestations.
+    value: ${{ steps.resolve.outputs.platform_digests }}
+  expect_index:
+    description: '"true" when more than one platform was built'
+    value: ${{ steps.resolve.outputs.expect_index }}
+  image_ref:
+    description: Immutable <image>@<index-digest> reference
+    value: ${{ steps.resolve.outputs.image_ref }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve digests
+      id: resolve
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+        PLATFORMS_JSON: ${{ inputs.platforms }}
+      run: |
+        set -euo pipefail
+        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        # shellcheck source=scripts/lib/common.sh
+        . "${root}/scripts/lib/common.sh"
+
+        require_set image "${IMAGE}"
+        require_set tag "${TAG}"
+        require_no_newline image "${IMAGE}"
+        require_no_newline tag "${TAG}"
+
+        platform_count="$(printf '%s' "${PLATFORMS_JSON}" | jq 'length')"
+        [ "${platform_count}" -gt 0 ] || die "the platforms input is empty"
+
+        if [ "${platform_count}" -gt 1 ]; then
+          expect_index=true
+        else
+          expect_index=false
+        fi
+
+        index="$(timeout --foreground 120s crane digest "${IMAGE}:${TAG}")"
+
+        digests=""
+        mapping='{}'
+        while IFS= read -r platform; do
+          [ -n "${platform}" ] || continue
+          if [ "${expect_index}" = "true" ]; then
+            child="$(timeout --foreground 120s crane digest \
+              --platform "${platform}" "${IMAGE}@${index}")"
+          else
+            # A single-platform build produces a plain manifest, so the child is
+            # the reference itself. Asking crane for a platform here would
+            # return the same digest anyway, but going through the index path
+            # would hide a genuinely single-arch image behind a successful call.
+            child="${index}"
+          fi
+          digests="${digests} ${child}"
+          mapping="$(printf '%s' "${mapping}" |
+            jq --arg p "${platform}" --arg d "${child}" '. + {($p): $d}')"
+        done <<<"$(printf '%s' "${PLATFORMS_JSON}" | jq -r '.[].platform')"
+
+        # shellcheck disable=SC2086
+        "${root}/scripts/validate-digests.sh" digests "${expect_index}" "${index}" ${digests}
+
+        emit_output index_digest "${index}"
+        emit_output expect_index "${expect_index}"
+        emit_output image_ref "${IMAGE}@${index}"
+        emit_output platform_digests "$(printf '%s' "${mapping}" | jq -c .)"
+
+        {
+          printf '### Digests\n\n'
+          printf '| Subject | Digest |\n|---|---|\n'
+          printf '| index | `%s` |\n' "${index}"
+          printf '%s' "${mapping}" |
+            jq -r 'to_entries[] | "| \(.key) | `\(.value)` |"'
+        } >>"${GITHUB_STEP_SUMMARY}"

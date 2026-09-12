@@ -1,0 +1,386 @@
+name: Build image (Docker)
+
+# Builds a Dockerfile into a multi-platform container image on native runners,
+# attests a CycloneDX SBOM to each platform manifest, and attaches SLSA build
+# provenance to the index.
+#
+# THIS FILE IS A TRUSTED BUILD DEFINITION. The same two rules as build-ko.yaml
+# apply and for the same reason: no input may become shell, and runs-on is not
+# caller-controlled. See that file's header for the full argument.
+#
+# Unlike ko, a Dockerfile build cannot cross-compile for free, so each platform
+# builds on its own native runner and the results are merged into an index.
+# Emulating linux/arm64 through QEMU in a single job would be simpler YAML and
+# far slower for anything that compiles or resolves packages.
+#
+# BuildKit's own provenance and SBOM attestations are disabled on purpose. They
+# would wrap even a single-platform build in an index, which changes what the
+# digest refers to, and this workflow publishes its own attestations with
+# subjects chosen deliberately.
+#
+# Usage:
+#
+#   jobs:
+#     release:
+#       permissions:
+#         contents: read
+#         packages: write
+#         id-token: write
+#         attestations: write
+#       uses: thingzio/actions/.github/workflows/build-docker.yaml@<sha>  # v1.0.0
+#       with:
+#         image: thingzio/my-app
+#         dockerfile: ./Dockerfile
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Repository path without the registry host, tag or digest, e.g.
+          thingzio/my-app. A value carrying a registry host is accepted only
+          when that host matches the registry input.
+        required: true
+        type: string
+      registry:
+        description: Registry host to publish to
+        required: false
+        type: string
+        default: ghcr.io
+      dockerfile:
+        description: Path to the Dockerfile, relative to the repository root
+        required: false
+        type: string
+        default: ./Dockerfile
+      context:
+        description: Build context, relative to the repository root
+        required: false
+        type: string
+        default: '.'
+      target:
+        description: Dockerfile stage to build; empty builds the final stage
+        required: false
+        type: string
+        default: ''
+      build_args:
+        description: Build arguments, one key=value per line
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: Comma-separated platforms; linux/amd64 and linux/arm64 are supported
+        required: false
+        type: string
+        default: linux/amd64,linux/arm64
+      tags:
+        description: Newline- or comma-separated tags replacing the derived set
+        required: false
+        type: string
+        default: ''
+      labels:
+        description: Additional OCI labels, one key=value per line
+        required: false
+        type: string
+        default: ''
+      cache:
+        description: Use the GitHub Actions cache backend for build layers
+        required: false
+        type: boolean
+        default: true
+      push:
+        description: >-
+          Publish the image. Forced to false on pull requests from forks, which
+          have no write credential and no OIDC token.
+        required: false
+        type: boolean
+        default: true
+      sbom:
+        description: Generate and attest a CycloneDX SBOM per platform
+        required: false
+        type: boolean
+        default: true
+      provenance:
+        description: Attach SLSA build provenance to the index digest
+        required: false
+        type: boolean
+        default: true
+      cosign_version:
+        description: Override the pinned cosign version
+        required: false
+        type: string
+        default: ''
+      syft_version:
+        description: Override the pinned syft version
+        required: false
+        type: string
+        default: ''
+      crane_version:
+        description: Override the pinned crane version
+        required: false
+        type: string
+        default: ''
+    secrets:
+      registry_username:
+        description: Registry username; omit for ghcr.io
+        required: false
+      registry_password:
+        description: Registry password or token; omit for ghcr.io
+        required: false
+    outputs:
+      digest:
+        description: Index digest of the published image
+        value: ${{ jobs.publish.outputs.digest }}
+      image_ref:
+        description: Immutable <registry>/<image>@<digest> reference
+        value: ${{ jobs.publish.outputs.image_ref }}
+      tags:
+        description: Newline-separated tags that were published
+        value: ${{ jobs.prepare.outputs.tags }}
+      platform_digests:
+        description: JSON object mapping platform to child manifest digest
+        value: ${{ jobs.publish.outputs.platform_digests }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.inputs.outputs.image }}
+      platforms: ${{ steps.inputs.outputs.platforms }}
+      matrix: ${{ steps.inputs.outputs.platforms }}
+      labels: ${{ steps.inputs.outputs.labels }}
+      build_args: ${{ steps.inputs.outputs.build_args }}
+      push: ${{ steps.inputs.outputs.push }}
+      tags: ${{ steps.tags.outputs.tags }}
+      primary_tag: ${{ steps.tags.outputs.primary_tag }}
+      candidate_tag: ${{ steps.tags.outputs.candidate_tag }}
+      crane: ${{ inputs.crane_version != '' && inputs.crane_version || steps.versions.outputs.crane }}
+      syft: ${{ inputs.syft_version != '' && inputs.syft_version || steps.versions.outputs.syft }}
+      cosign: ${{ inputs.cosign_version != '' && inputs.cosign_version || steps.versions.outputs.cosign }}
+    steps:
+      # See build-ko.yaml for why this is necessary: inside a reusable workflow
+      # a relative `uses: ./...` resolves against the caller's checkout, so the
+      # build definition must fetch its own composite actions explicitly.
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Load pinned versions
+        id: versions
+        uses: ./.builder/.github/actions/load-versions
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          INPUT_LABELS: ${{ inputs.labels }}
+          INPUT_BUILD_ARGS: ${{ inputs.build_args }}
+          INPUT_PUSH: ${{ inputs.push }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          . .builder/scripts/lib/common.sh
+
+          image="$(.builder/scripts/validate-inputs.sh image "${INPUT_REGISTRY}" "${INPUT_IMAGE}")"
+          platforms="$(.builder/scripts/validate-inputs.sh platforms "${INPUT_PLATFORMS}")"
+          labels="$(.builder/scripts/validate-inputs.sh kv labels "${INPUT_LABELS}")"
+          build_args="$(.builder/scripts/validate-inputs.sh kv build_args "${INPUT_BUILD_ARGS}")"
+
+          push="${INPUT_PUSH}"
+          if [ "${push}" = "true" ] && [ "${IS_FORK_PR}" = "true" ]; then
+            push=false
+            notice "pull request from a fork: building without publishing, signing or attesting"
+            {
+              printf '> **Fork pull request** — the image is built and validated,\n'
+              printf '> but not published, signed or attested.\n'
+            } >>"${GITHUB_STEP_SUMMARY}"
+          fi
+
+          emit_output image "${image}"
+          emit_output platforms "${platforms}"
+          emit_output push "${push}"
+          emit_multiline_output labels "${labels}"
+          emit_multiline_output build_args "${build_args}"
+
+      - name: Derive tags
+        id: tags
+        uses: ./.builder/.github/actions/image-tags
+        with:
+          tags: ${{ inputs.tags }}
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One architecture failing should not hide whether the other one works.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Authenticate to the registry
+        if: needs.prepare.outputs.push == 'true'
+        uses: ./.builder/.github/actions/registry-login
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: src/${{ inputs.context }}
+          file: src/${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
+          platforms: ${{ matrix.platform }}
+          push: ${{ needs.prepare.outputs.push == 'true' }}
+          # Per-architecture staging tag. The index is assembled from these in
+          # the publish job and only then does anything get promoted.
+          tags: ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.candidate_tag }}-${{ matrix.arch }}
+          build-args: ${{ needs.prepare.outputs.build_args }}
+          # BuildKit's own attestations are off: they would wrap a
+          # single-platform build in an index and change what the digest refers
+          # to, and this workflow publishes its own with deliberate subjects.
+          provenance: false
+          sbom: false
+          cache-from: ${{ inputs.cache && format('type=gha,scope={0}', matrix.arch) || '' }}
+          cache-to: ${{ inputs.cache && format('type=gha,mode=max,scope={0}', matrix.arch) || '' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.primary_tag }}
+            ${{ needs.prepare.outputs.labels }}
+
+  publish:
+    name: Merge and attest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.push == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    concurrency:
+      group: build-docker-${{ github.repository }}-${{ needs.prepare.outputs.image }}-${{ github.ref }}
+      cancel-in-progress: false
+    outputs:
+      digest: ${{ steps.digests.outputs.index_digest }}
+      image_ref: ${{ steps.digests.outputs.image_ref }}
+      platform_digests: ${{ steps.digests.outputs.platform_digests }}
+    steps:
+      - name: Checkout the build definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Setup build tools
+        uses: ./.builder/.github/actions/setup-build-tools
+        with:
+          crane: ${{ needs.prepare.outputs.crane }}
+          syft: ${{ needs.prepare.outputs.syft }}
+          cosign: ${{ needs.prepare.outputs.cosign }}
+
+      - name: Authenticate to the registry
+        uses: ./.builder/.github/actions/registry-login
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      - name: Assemble the candidate
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          CANDIDATE_TAG: ${{ needs.prepare.outputs.candidate_tag }}
+          PLATFORMS_JSON: ${{ needs.prepare.outputs.platforms }}
+        run: |
+          set -euo pipefail
+          . .builder/scripts/lib/common.sh
+
+          count="$(printf '%s' "${PLATFORMS_JSON}" | jq 'length')"
+
+          if [ "${count}" = "1" ]; then
+            # A single-platform build must stay a plain manifest. Running
+            # imagetools create over one source would wrap it in an index, and
+            # the SBOM and provenance subjects would then disagree with what a
+            # consumer resolves.
+            arch="$(printf '%s' "${PLATFORMS_JSON}" | jq -r '.[0].arch')"
+            crane tag "${IMAGE}:${CANDIDATE_TAG}-${arch}" "${CANDIDATE_TAG}"
+            log "single-platform build: tagged ${CANDIDATE_TAG} from ${CANDIDATE_TAG}-${arch}"
+            exit 0
+          fi
+
+          sources=()
+          while IFS= read -r arch; do
+            [ -n "${arch}" ] || continue
+            sources+=("${IMAGE}:${CANDIDATE_TAG}-${arch}")
+          done <<<"$(printf '%s' "${PLATFORMS_JSON}" | jq -r '.[].arch')"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${CANDIDATE_TAG}" \
+            "${sources[@]}"
+          log "assembled a ${count}-platform index at ${CANDIDATE_TAG}"
+
+      - name: Resolve digests
+        id: digests
+        uses: ./.builder/.github/actions/resolve-digests
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          tag: ${{ needs.prepare.outputs.candidate_tag }}
+          platforms: ${{ needs.prepare.outputs.platforms }}
+
+      - name: Generate SBOMs and attest
+        uses: ./.builder/.github/actions/sbom-attest
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          index_digest: ${{ steps.digests.outputs.index_digest }}
+          platform_digests: ${{ steps.digests.outputs.platform_digests }}
+          sbom: ${{ inputs.sbom }}
+          provenance: ${{ inputs.provenance }}
+
+      - name: Promote tags
+        uses: ./.builder/.github/actions/promote-tags
+        with:
+          image: ${{ needs.prepare.outputs.image }}
+          digest: ${{ steps.digests.outputs.index_digest }}
+          tags: ${{ needs.prepare.outputs.tags }}

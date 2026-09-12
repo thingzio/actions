@@ -1,0 +1,71 @@
+name: Promote tags
+description: >-
+  Points the release tags at an already-attested digest. This is the last step
+  of a build and the only one that makes an image publicly reachable by name.
+
+# Digest-first publishing: the build pushes to a run-unique candidate tag, the
+# attestations are signed against the resulting digests, and only then do the
+# release tags move. A failed signing step therefore never leaves a published
+# `latest`, and a re-run re-points the same tags at the same digest, so the
+# operation is idempotent.
+#
+# `crane tag` re-points a tag at an existing manifest without pulling or pushing
+# any layers, so promotion is a registry-side metadata change rather than a
+# second upload that could produce a different digest.
+
+inputs:
+  image:
+    description: Full image name including registry, without tag or digest
+    required: true
+  digest:
+    description: Attested index digest to point the tags at
+    required: true
+  tags:
+    description: Newline-separated tags to publish
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Promote
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ inputs.digest }}
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        # shellcheck source=scripts/lib/common.sh
+        . "${root}/scripts/lib/common.sh"
+
+        require_set image "${IMAGE}"
+        require_set digest "${DIGEST}"
+        require_set tags "${TAGS}"
+        require_no_newline image "${IMAGE}"
+        require_no_newline digest "${DIGEST}"
+
+        [[ "${DIGEST}" =~ ^sha256:[a-f0-9]{64}$ ]] ||
+          die "digest must be of the form sha256:<64 lowercase hex>, got '${DIGEST}'"
+
+        published=""
+        while IFS= read -r tag; do
+          [ -n "${tag}" ] || continue
+          # Re-validating here rather than trusting the caller: this action is
+          # public and may be used outside the reusable workflows, where nothing
+          # upstream has checked the tag grammar.
+          [[ "${tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] ||
+            die "'${tag}' is not a valid OCI tag"
+
+          timeout --foreground 120s crane tag "${IMAGE}@${DIGEST}" "${tag}"
+          printf '::notice::published %s:%s -> %s\n' "${IMAGE}" "${tag}" "${DIGEST}"
+          published="${published}- \`${IMAGE}:${tag}\`"$'\n'
+        done <<<"${TAGS}"
+
+        {
+          printf '### Published\n\n'
+          printf 'Digest: `%s`\n\n' "${DIGEST}"
+          printf '%s\n' "${published}"
+          printf 'Pull by digest to get exactly what was attested:\n\n'
+          printf '```\ndocker pull %s@%s\n```\n' "${IMAGE}" "${DIGEST}"
+        } >>"${GITHUB_STEP_SUMMARY}"

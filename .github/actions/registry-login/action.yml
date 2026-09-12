@@ -1,0 +1,54 @@
+name: Registry login
+description: >-
+  Authenticates to an OCI registry. Defaults to GitHub Container Registry using
+  the job's GITHUB_TOKEN, so the common case needs no secret at all.
+
+# The zero-configuration path is deliberate. A consumer publishing to
+# ghcr.io/<their-org>/<their-repo> only needs `packages: write` on the job; there
+# is no secret to create, scope, rotate or leak. Any other registry supplies
+# credentials explicitly.
+
+inputs:
+  registry:
+    description: Registry host, e.g. ghcr.io
+    required: false
+    default: ghcr.io
+  username:
+    description: >-
+      Registry username. Defaults to the actor that triggered the run, which is
+      what ghcr.io expects alongside GITHUB_TOKEN.
+    required: false
+    default: ''
+  password:
+    description: >-
+      Registry password or token. Defaults to the job's GITHUB_TOKEN, which is
+      valid for ghcr.io only.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Validated before the login action sees them so a malformed host fails with
+    # an actionable message rather than a docker CLI error, and so a newline
+    # cannot reach the credential helper.
+    - name: Validate registry
+      shell: bash
+      env:
+        INPUT_REGISTRY: ${{ inputs.registry }}
+      run: |
+        set -euo pipefail
+        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
+        # shellcheck source=scripts/lib/common.sh
+        . "${root}/scripts/lib/common.sh"
+        require_set registry "${INPUT_REGISTRY}"
+        require_no_newline registry "${INPUT_REGISTRY}"
+        [[ "${INPUT_REGISTRY}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] ||
+          die "registry '${INPUT_REGISTRY}' is not a valid host[:port]"
+
+    - name: Log in to the registry
+      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username != '' && inputs.username || github.actor }}
+        password: ${{ inputs.password != '' && inputs.password || github.token }}
