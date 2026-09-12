@@ -1,0 +1,166 @@
+name: Deploy (Cloud Run)
+
+# Deploys already-published, digest-pinned images to Cloud Run services and
+# jobs, optionally pausing a Cloud Scheduler job around the rollout.
+#
+# It does not build anything. It takes the immutable references a build
+# workflow produced, validates them, and points Cloud Run at them.
+#
+# Cloud Run will only pull from Artifact Registry, so images published to
+# ghcr.io are fetched through an Artifact Registry remote repository. That is a
+# path rewrite, not a copy: the remote repository is a pull-through cache and
+# the digest is identical on the far side, so the bytes deployed are the bytes
+# that were built, signed and attested.
+#
+# THE TRUST BOUNDARY IS scripts/actions/deploy-targets.sh.
+#
+# Every target reaches a gcloud command line. A tag is never accepted, the
+# registry is checked against where the build publishes, and resource names are
+# matched against the Cloud Run grammar so a name cannot introduce a flag. That
+# logic lives in a tested script rather than inline YAML, because inline YAML is
+# linted by nothing and tested by nothing -- and this is the workflow that
+# changes production.
+#
+# Usage:
+#
+#   jobs:
+#     deploy:
+#       permissions:
+#         contents: read
+#         id-token: write
+#       uses: thingzio/actions/.github/workflows/deploy-cloud-run.yaml@<sha>  # v1.4.0
+#       with:
+#         region: ${{ vars.REGION }}
+#         project_id: ${{ vars.PROJECT_ID }}
+#         workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+#         service_account: ${{ vars.DEPLOYER_SA }}
+#         targets: |
+#           service=my-serve=${{ needs.build.outputs.image_ref }}
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        description: >-
+          Newline-separated "<service|job>=<name>=<image@digest>" entries.
+          Deployed in the order given, so a consumer can be updated before its
+          producer. Blank lines and "#" comments are ignored.
+        required: true
+        type: string
+      region:
+        description: Cloud Run region
+        required: true
+        type: string
+      project_id:
+        description: GCP project ID
+        required: true
+        type: string
+      workload_identity_provider:
+        description: Workload Identity Federation provider resource name
+        required: true
+        type: string
+      service_account:
+        description: Deployer service account email
+        required: true
+        type: string
+      environment:
+        description: >-
+          GitHub environment the deploy job runs in, for its protection rules
+          and scoped variables.
+        required: false
+        type: string
+        default: saas
+      expected_registry:
+        description: Registry the images must have been published to
+        required: false
+        type: string
+        default: ghcr.io
+      remote_repository:
+        description: Artifact Registry remote repository that fronts the registry
+        required: false
+        type: string
+        default: gh
+      scheduler_job:
+        description: >-
+          Cloud Scheduler job to pause for the duration of the rollout and
+          resume afterwards. Empty disables the behaviour.
+        required: false
+        type: string
+        default: ''
+      timeout_minutes:
+        description: Job timeout
+        required: false
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    # Two deploys of the same project racing would interleave their rollouts
+    # and, worse, their scheduler pause/resume.
+    concurrency:
+      group: deploy-cloud-run-${{ inputs.project_id }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout the deploy definition
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .builder
+          persist-credentials: false
+
+      # Validate before authenticating. A malformed target should fail without
+      # having minted a production credential.
+      - name: Validate the deployment targets
+        id: plan
+        env:
+          TARGETS: ${{ inputs.targets }}
+          EXPECTED_REGISTRY: ${{ inputs.expected_registry }}
+          REMOTE_REPOSITORY: ${{ inputs.remote_repository }}
+          REGION: ${{ inputs.region }}
+          PROJECT_ID: ${{ inputs.project_id }}
+        run: .builder/scripts/actions/deploy-targets.sh
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
+
+      - name: Pause the scheduler
+        if: inputs.scheduler_job != ''
+        env:
+          SCHEDULER_JOB: ${{ inputs.scheduler_job }}
+          REGION: ${{ inputs.region }}
+        run: .builder/scripts/actions/scheduler-state.sh pause
+
+      - name: Deploy
+        id: deploy
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+          REGION: ${{ inputs.region }}
+        run: .builder/scripts/actions/cloud-run-deploy.sh
+
+      # always(), so a failed rollout does not leave delivery paused. This is
+      # the difference between a failed deploy and a silent outage: the
+      # previous revision keeps serving either way, but a paused scheduler
+      # stops work nothing else will notice has stopped.
+      - name: Resume the scheduler
+        if: always() && inputs.scheduler_job != ''
+        env:
+          SCHEDULER_JOB: ${{ inputs.scheduler_job }}
+          REGION: ${{ inputs.region }}
+        run: .builder/scripts/actions/scheduler-state.sh resume
