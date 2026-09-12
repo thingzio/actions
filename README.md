@@ -24,14 +24,15 @@ Pin to a commit SHA, or track the floating `@v1` tag. Current release:
 | [`codeql-go.yaml`](.github/workflows/codeql-go.yaml) | Runs **CodeQL** over a Go repository and uploads the results to the caller's security tab. Builds explicitly, detects vendoring, and skips private repositories so it cannot start GHAS billing by surprise. | [docs](.github/workflows/codeql-go.md) |
 | [`terraform-scan.yaml`](.github/workflows/terraform-scan.yaml) | Scans **Terraform** for misconfigurations with Trivy, failing on a severity threshold. Replaces tfsec, which is end of life and whose ruleset is frozen. | [docs](.github/workflows/terraform-scan.md) |
 | [`lint-go.yaml`](.github/workflows/lint-go.yaml) | Runs **gofmt**, **go vet** and **golangci-lint** over a Go repository, at the org-pinned linter version. | [docs](.github/workflows/lint-go.md) |
+| [`deploy-cloud-run.yaml`](.github/workflows/deploy-cloud-run.yaml) | Deploys digest-pinned images to Cloud Run services and jobs, pulling through an Artifact Registry remote repository, with optional scheduler pause/resume. | [docs](.github/workflows/deploy-cloud-run.md) |
 
 Use `build-ko` whenever the answer is "a Go binary in a minimal base image";
 use `build-docker` when the image needs system packages, a non-Go runtime, or
 multiple build stages.
 
 Both build workflows reach **SLSA v1.0 Build Level 3** — see
-[SLSA](docs/slsa.md). `codeql-go`, `terraform-scan` and `lint-go` sign
-nothing and publish no artifact, so
+[SLSA](docs/slsa.md). `codeql-go`, `terraform-scan`, `lint-go` and
+`deploy-cloud-run` sign nothing and publish no artifact, so
 the level does not apply to it; the no-caller-supplied-code rule below still
 does.
 
@@ -110,7 +111,9 @@ Worth reading once; it is also the bar a new workflow has to meet.
   single source of truth; nothing anywhere hardcodes a version.
 - **Proven, not asserted.** [`selftest.yaml`](.github/workflows/selftest.yaml)
   exercises every workflow against real fixtures on every pull request and
-  verifies the result, including the commands published for consumers.
+  verifies the result, including the commands published for consumers. The one
+  exception is `deploy-cloud-run`, which would need a disposable GCP project;
+  its decision logic is unit tested with gcloud stubbed.
 
 ## Local development
 
