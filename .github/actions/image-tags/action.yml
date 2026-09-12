@@ -47,21 +47,4 @@ runs:
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-
-        tags="$("${root}/scripts/derive-tags.sh" release)"
-        candidate="$("${root}/scripts/derive-tags.sh" candidate)"
-        primary="$(printf '%s\n' "${tags}" | head -1)"
-
-        emit_multiline_output tags "${tags}"
-        emit_output primary_tag "${primary}"
-        emit_output candidate_tag "${candidate}"
-
-        {
-          printf '### Tags\n\n'
-          printf 'Candidate: `%s`\n\n' "${candidate}"
-          printf 'Release tags:\n\n'
-          printf '%s\n' "${tags}" | sed 's/^/- `/; s/$/`/'
-        } >>"${GITHUB_STEP_SUMMARY}"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/image-tags.sh"

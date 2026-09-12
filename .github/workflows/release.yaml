@@ -1,0 +1,163 @@
+name: Release
+
+# Cuts a release from a semantic version tag and moves the floating major tag.
+#
+# Consumers are told to pin these workflows to a commit SHA, which is what
+# OpenSSF Scorecard's pinned-dependencies check wants and what this repository
+# does with every action it uses itself. The floating vN tag exists for teams
+# that prefer the lower-effort option and accept the trade-off; both are
+# documented in the README.
+#
+# Version numbers are part of the security contract here, not just packaging.
+# The certificate identity that verifies an image contains the reusable
+# workflow's filename, so renaming a workflow file is a breaking change even
+# when its inputs are untouched. That is why this refuses to publish a release
+# whose tag is not on the default branch: a release cut from a side branch could
+# point the floating tag at a build definition that was never reviewed.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/common.sh
+
+          tag="${INPUT_TAG:-${REF_NAME}}"
+          require_set tag "${tag}"
+          require_no_newline tag "${tag}"
+
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
+            die "release tags must be vMAJOR.MINOR.PATCH[-prerelease], got '${tag}'"
+
+          git rev-parse -q --verify "refs/tags/${tag}" >/dev/null ||
+            die "tag ${tag} does not exist"
+
+          sha="$(git rev-list -n1 "refs/tags/${tag}")"
+
+          # A release cut from a side branch could point the floating major tag
+          # at a build definition that never passed review.
+          git merge-base --is-ancestor "${sha}" "origin/${DEFAULT_BRANCH}" ||
+            die "tag ${tag} (${sha}) is not an ancestor of ${DEFAULT_BRANCH}"
+
+          if [[ "${tag}" =~ - ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          major="${tag%%.*}"
+
+          emit_output tag "${tag}"
+          emit_output sha "${sha}"
+          emit_output major "${major}"
+          emit_output prerelease "${prerelease}"
+
+      # The selftest is the only evidence these workflows actually build and
+      # attest. Releasing a commit whose selftest never passed would ship an
+      # unproven build definition to every repository in the organization.
+      - name: Require a green selftest on the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/common.sh
+
+          conclusion="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/selftest.yaml/runs?head_sha=${SHA}&status=completed" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+
+          [ "${conclusion}" -gt 0 ] ||
+            die "no successful selftest run for ${SHA}; refusing to release an unproven build definition"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(release create "${TAG}" --generate-notes --verify-tag)
+          if [ "${PRERELEASE}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            printf '::notice::release %s already exists; leaving it untouched\n' "${TAG}"
+          else
+            gh "${args[@]}"
+          fi
+
+      # A prerelease deliberately does not move the floating major tag, for the
+      # same reason it does not claim `latest` on an image: v1 must never
+      # resolve to something not yet considered releasable.
+      - name: Move the floating major tag
+        if: steps.tag.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAJOR: ${{ steps.tag.outputs.major }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Updated through the API rather than `git push --force` so the job
+          # never needs persisted git credentials on disk.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${MAJOR}" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR}" \
+              -f "sha=${SHA}" -F force=true >/dev/null
+            printf '::notice::moved %s to %s\n' "${MAJOR}" "${SHA}"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${MAJOR}" -f "sha=${SHA}" >/dev/null
+            printf '::notice::created %s at %s\n' "${MAJOR}" "${SHA}"
+          fi
+
+      - name: Summarize
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          SHA: ${{ steps.tag.outputs.sha }}
+          MAJOR: ${{ steps.tag.outputs.major }}
+        run: |
+          set -euo pipefail
+          tick='`'
+          fence="${tick}${tick}${tick}"
+          {
+            printf '## Released %s\n\n' "${TAG}"
+            printf 'Pin by commit SHA, which is what this repository does with every action it uses:\n\n'
+            printf '%syaml\n' "${fence}"
+            printf 'uses: %s/.github/workflows/build-ko.yaml@%s  # %s\n' \
+              "${GITHUB_REPOSITORY}" "${SHA}" "${TAG}"
+            printf '%s\n\n' "${fence}"
+            printf 'Or track the floating major tag %s%s%s.\n' "${tick}" "${MAJOR}" "${tick}"
+          } >>"${GITHUB_STEP_SUMMARY}"

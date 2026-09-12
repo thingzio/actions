@@ -35,37 +35,4 @@ runs:
         TAGS: ${{ inputs.tags }}
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-
-        require_set image "${IMAGE}"
-        require_set digest "${DIGEST}"
-        require_set tags "${TAGS}"
-        require_no_newline image "${IMAGE}"
-        require_no_newline digest "${DIGEST}"
-
-        [[ "${DIGEST}" =~ ^sha256:[a-f0-9]{64}$ ]] ||
-          die "digest must be of the form sha256:<64 lowercase hex>, got '${DIGEST}'"
-
-        published=""
-        while IFS= read -r tag; do
-          [ -n "${tag}" ] || continue
-          # Re-validating here rather than trusting the caller: this action is
-          # public and may be used outside the reusable workflows, where nothing
-          # upstream has checked the tag grammar.
-          [[ "${tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] ||
-            die "'${tag}' is not a valid OCI tag"
-
-          timeout --foreground 120s crane tag "${IMAGE}@${DIGEST}" "${tag}"
-          printf '::notice::published %s:%s -> %s\n' "${IMAGE}" "${tag}" "${DIGEST}"
-          published="${published}- \`${IMAGE}:${tag}\`"$'\n'
-        done <<<"${TAGS}"
-
-        {
-          printf '### Published\n\n'
-          printf 'Digest: `%s`\n\n' "${DIGEST}"
-          printf '%s\n' "${published}"
-          printf 'Pull by digest to get exactly what was attested:\n\n'
-          printf '```\ndocker pull %s@%s\n```\n' "${IMAGE}" "${DIGEST}"
-        } >>"${GITHUB_STEP_SUMMARY}"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/promote-tags.sh"

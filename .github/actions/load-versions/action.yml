@@ -42,17 +42,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-
         # GITHUB_ACTION_PATH is <checkout>/.github/actions/load-versions whether
         # this action was reached through a local path or as
         # thingzio/actions/.github/actions/load-versions@<ref>, so three levels
         # up is the repository root in both cases.
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-
-        for key in tools.ko tools.crane tools.syft tools.cosign \
-          tools.actionlint tools.yamllint images.ko_default_base; do
-          name="${key#*.}"
-          value="$("${root}/scripts/versions.sh" "${key}" "${root}/.versions.yaml")"
-          printf '%s=%s\n' "${name}" "${value}" >>"${GITHUB_OUTPUT}"
-          printf '%-16s %s\n' "${name}" "${value}"
-        done
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/load-versions.sh"

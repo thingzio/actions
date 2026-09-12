@@ -65,61 +65,17 @@ runs:
         GH_TOKEN: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-
-        require_set image_ref "${IMAGE_REF}"
-        require_set signer_workflow "${SIGNER_WORKFLOW}"
-        require_no_newline image_ref "${IMAGE_REF}"
-        require_no_newline signer_repo "${SIGNER_REPO}"
-        require_no_newline signer_workflow "${SIGNER_WORKFLOW}"
-
-        case "${IMAGE_REF}" in
-          *@sha256:*) ;;
-          *) die "image_ref must be pinned to a digest, got '${IMAGE_REF}'" ;;
-        esac
-
-        gh attestation verify "oci://${IMAGE_REF}" \
-          --repo "${REPO}" \
-          --signer-repo "${SIGNER_REPO}" \
-          --signer-workflow "${SIGNER_WORKFLOW}"
-
-        printf '::notice::provenance verified for %s (signed by %s)\n' \
-          "${IMAGE_REF}" "${SIGNER_REPO}"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/verify-image.sh" provenance
 
     - name: Verify SBOM attestations
       if: inputs.platform_digests != '{}'
       shell: bash
       env:
         IMAGE_REF: ${{ inputs.image_ref }}
+        REPO: ${{ inputs.repo != '' && inputs.repo || github.repository }}
         SIGNER_REPO: ${{ inputs.signer_repo }}
         SIGNER_WORKFLOW: ${{ inputs.signer_workflow }}
         PLATFORM_DIGESTS: ${{ inputs.platform_digests }}
-        SOURCE_REPO: ${{ inputs.repo != '' && inputs.repo || github.repository }}
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-
-        image="${IMAGE_REF%@*}"
-
-        # Escape the regexp metacharacters in the caller-supplied path so a
-        # workflow filename cannot widen the identity match.
-        workflow_escaped="$(printf '%s' "${SIGNER_WORKFLOW}" | sed 's/[.[\*^$()+?{|]/\\&/g')"
-        signer_escaped="$(printf '%s' "${SIGNER_REPO}" | sed 's/[.[\*^$()+?{|]/\\&/g')"
-        identity="^https://github\.com/${signer_escaped}/${workflow_escaped}@"
-
-        while IFS=$'\t' read -r platform digest; do
-          [ -n "${platform}" ] || continue
-          timeout --foreground 120s cosign verify-attestation \
-            --type cyclonedx \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp "${identity}" \
-            --certificate-github-workflow-repository "${SOURCE_REPO}" \
-            "${image}@${digest}" >/dev/null
-
-          printf '::notice::CycloneDX attestation verified for %s (%s)\n' "${platform}" "${digest}"
-        done <<<"$(printf '%s' "${PLATFORM_DIGESTS}" |
-          jq -r 'to_entries[] | "\(.key)\t\(.value)"')"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/verify-image.sh" sbom

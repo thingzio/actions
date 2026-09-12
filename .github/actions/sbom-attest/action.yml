@@ -56,45 +56,10 @@ runs:
       env:
         IMAGE: ${{ inputs.image }}
         PLATFORM_DIGESTS: ${{ inputs.platform_digests }}
+        SBOM_OUTPUT_DIR: ${{ runner.temp }}/thingz-sbom
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-
-        require_set image "${IMAGE}"
-        require_no_newline image "${IMAGE}"
-
-        outdir="${RUNNER_TEMP}/thingz-sbom"
-        mkdir -p "${outdir}"
-
-        # A filename derived from the image path, flattened so it is safe on any
-        # filesystem and in an artifact name.
-        safe="$(printf '%s' "${IMAGE}" | tr -c 'A-Za-z0-9._-' '-')"
-
-        while IFS=$'\t' read -r platform digest; do
-          [ -n "${platform}" ] || continue
-          arch="$(printf '%s' "${platform}" | tr '/' '-')"
-          file="${outdir}/sbom-${safe}-${arch}.cdx.json"
-
-          # The child manifest digest is passed directly, so syft scans exactly
-          # one root filesystem and no --platform disambiguation is needed.
-          timeout --foreground 300s syft scan \
-            "registry:${IMAGE}@${digest}" \
-            --output "cyclonedx-json=${file}"
-
-          "${root}/scripts/validate-digests.sh" sbom "${file}"
-
-          timeout --foreground 120s cosign attest \
-            --yes \
-            --new-bundle-format=true \
-            --type cyclonedx \
-            --predicate "${file}" \
-            "${IMAGE}@${digest}"
-
-          printf '::notice::attested CycloneDX SBOM for %s to %s\n' "${platform}" "${digest}"
-        done <<<"$(printf '%s' "${PLATFORM_DIGESTS}" |
-          jq -r 'to_entries[] | "\(.key)\t\(.value)"')"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/sbom-attest.sh"
 
     - name: Upload SBOMs
       if: inputs.sbom == 'true'

@@ -35,16 +35,10 @@ runs:
     - name: Validate registry
       shell: bash
       env:
-        INPUT_REGISTRY: ${{ inputs.registry }}
+        REGISTRY: ${{ inputs.registry }}
       run: |
         set -euo pipefail
-        root="$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)"
-        # shellcheck source=scripts/lib/common.sh
-        . "${root}/scripts/lib/common.sh"
-        require_set registry "${INPUT_REGISTRY}"
-        require_no_newline registry "${INPUT_REGISTRY}"
-        [[ "${INPUT_REGISTRY}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] ||
-          die "registry '${INPUT_REGISTRY}' is not a valid host[:port]"
+        "$(cd -- "${GITHUB_ACTION_PATH}/../../.." && pwd)/scripts/actions/validate-registry.sh"
 
     - name: Log in to the registry
       uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
