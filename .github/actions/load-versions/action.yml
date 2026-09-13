@@ -42,6 +42,9 @@ outputs:
   shellcheck:
     description: shellcheck version, e.g. v0.11.0
     value: ${{ steps.versions.outputs.shellcheck }}
+  zizmor:
+    description: zizmor version, unprefixed, e.g. 1.30.1
+    value: ${{ steps.versions.outputs.zizmor }}
   ko_default_base:
     description: Default base image for ko builds
     value: ${{ steps.versions.outputs.ko_default_base }}

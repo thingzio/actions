@@ -180,13 +180,16 @@ jobs:
       cosign: ${{ inputs.cosign_version != '' && inputs.cosign_version || steps.versions.outputs.cosign }}
       base_image: ${{ inputs.base_image != '' && inputs.base_image || steps.versions.outputs.ko_default_base }}
     steps:
-      # The build definition checks itself out. Inside a reusable workflow a
-      # relative `uses: ./...` resolves against the CALLER's checkout, so the
-      # only way to reach this repository's own composite actions is to fetch
-      # them explicitly. job.workflow_repository and job.workflow_sha name the
-      # workflow file that defines this job, which is this file, at the exact
-      # commit that is running -- so the workflow and its actions can never
-      # version-skew even when a caller pins the moving @v1 tag.
+      # The build definition checks itself out, but only for scripts/. The
+      # composite actions are reached with `uses: $/...`, which the runner
+      # resolves to this repository at the commit of the workflow file that
+      # defines this job -- so the workflow and its actions cannot version-skew
+      # even when a caller pins the moving @v1 tag. What `$/` cannot do is put
+      # scripts/ on disk for a `run:` block, and the steps below source
+      # scripts/lib/common.sh and exec scripts/validate-inputs.sh directly.
+      #
+      # `./...` would be wrong for both: inside a reusable workflow it resolves
+      # against the CALLER's checkout, not this one.
       - name: Checkout the build definition
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -197,7 +200,7 @@ jobs:
 
       - name: Load pinned versions
         id: versions
-        uses: ./.builder/.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       - name: Validate inputs
         id: inputs
@@ -241,7 +244,7 @@ jobs:
 
       - name: Derive tags
         id: tags
-        uses: ./.builder/.github/actions/image-tags
+        uses: $/.github/actions/image-tags
         with:
           tags: ${{ inputs.tags }}
 
@@ -306,7 +309,7 @@ jobs:
           cache-dependency-path: ${{ steps.golock.outputs.path }}
 
       - name: Setup build tools
-        uses: ./.builder/.github/actions/setup-build-tools
+        uses: $/.github/actions/setup-build-tools
         with:
           ko: ${{ needs.prepare.outputs.ko }}
           crane: ${{ needs.prepare.outputs.crane }}
@@ -315,7 +318,7 @@ jobs:
 
       - name: Authenticate to the registry
         if: needs.prepare.outputs.push == 'true'
-        uses: ./.builder/.github/actions/registry-login
+        uses: $/.github/actions/registry-login
         with:
           registry: ${{ inputs.registry }}
           username: ${{ secrets.registry_username }}
@@ -370,7 +373,7 @@ jobs:
       - name: Resolve digests
         id: digests
         if: needs.prepare.outputs.push == 'true'
-        uses: ./.builder/.github/actions/resolve-digests
+        uses: $/.github/actions/resolve-digests
         with:
           image: ${{ needs.prepare.outputs.image }}
           tag: ${{ needs.prepare.outputs.candidate_tag }}
@@ -378,7 +381,7 @@ jobs:
 
       - name: Generate SBOMs and attest
         if: needs.prepare.outputs.push == 'true'
-        uses: ./.builder/.github/actions/sbom-attest
+        uses: $/.github/actions/sbom-attest
         with:
           image: ${{ needs.prepare.outputs.image }}
           index_digest: ${{ steps.digests.outputs.index_digest }}
@@ -390,7 +393,7 @@ jobs:
       # attestations are already published.
       - name: Promote tags
         if: needs.prepare.outputs.push == 'true'
-        uses: ./.builder/.github/actions/promote-tags
+        uses: $/.github/actions/promote-tags
         with:
           image: ${{ needs.prepare.outputs.image }}
           digest: ${{ steps.digests.outputs.index_digest }}

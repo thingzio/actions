@@ -16,6 +16,7 @@ export PATH := $(BIN):$(PATH)
 ACTIONLINT_VERSION := $(shell $(VERSIONS) tools.actionlint)
 YAMLLINT_VERSION := $(shell $(VERSIONS) tools.yamllint)
 SHELLCHECK_VERSION := $(shell $(VERSIONS) tools.shellcheck)
+ZIZMOR_VERSION := $(shell $(VERSIONS) tools.zizmor)
 
 .PHONY: help
 help: ## Show this help
@@ -38,7 +39,7 @@ test-offline: ## Run the shell test suite, skipping tests that need the network
 	@THINGZ_SKIP_NETWORK_TESTS=1 ./test/run.sh
 
 .PHONY: lint
-lint: lint-actions lint-yaml lint-shell ## Run every linter
+lint: lint-actions lint-yaml lint-shell lint-zizmor ## Run every linter
 
 .PHONY: lint-actions
 lint-actions: $(BIN)/actionlint ## Lint workflows and composite actions
@@ -54,10 +55,18 @@ lint-shell: $(BIN)/shellcheck ## Lint shell scripts
 		| sort -z \
 		| xargs -0 $(BIN)/shellcheck --severity=style --external-sources
 
+# The same audit the `ci` workflow reports to code scanning. Without this target
+# zizmor findings could only ever be discovered after a push, which is how 40 of
+# them accumulated unnoticed. Online audits are off: they need a GitHub token,
+# and a check that fails on a laptop for lack of credentials is not a check.
+.PHONY: lint-zizmor
+lint-zizmor: $(BIN)/zizmor ## Audit workflows for Actions-specific security issues
+	@$(BIN)/zizmor --no-online-audits --quiet .github/
+
 ## Tooling
 
 .PHONY: tools
-tools: $(BIN)/actionlint $(BIN)/yamllint $(BIN)/shellcheck ## Install every pinned tool into ./.bin
+tools: $(BIN)/actionlint $(BIN)/yamllint $(BIN)/shellcheck $(BIN)/zizmor ## Install every pinned tool into ./.bin
 
 $(BIN)/actionlint:
 	@./scripts/install-tool.sh actionlint $(ACTIONLINT_VERSION) $(BIN)
@@ -73,6 +82,15 @@ $(BIN)/yamllint:
 		yamllint==$(YAMLLINT_VERSION)
 	@ln -sf $(BIN)/venv/bin/yamllint $(BIN)/yamllint
 
+# zizmor publishes a wheel with the binary bundled, so it shares the venv above
+# rather than needing a second toolchain. CI runs it as a pinned container image
+# through zizmor-action; both resolve the same version from .versions.yaml.
+$(BIN)/zizmor:
+	@python3 -m venv $(BIN)/venv
+	@$(BIN)/venv/bin/pip install --quiet --disable-pip-version-check \
+		zizmor==$(ZIZMOR_VERSION)
+	@ln -sf $(BIN)/venv/bin/zizmor $(BIN)/zizmor
+
 .PHONY: versions
 versions: ## Print every pinned version
 	@printf '%-12s %s\n' \
@@ -82,7 +100,8 @@ versions: ## Print every pinned version
 		cosign     "$$($(VERSIONS) tools.cosign)" \
 		actionlint "$$($(VERSIONS) tools.actionlint)" \
 		yamllint   "$$($(VERSIONS) tools.yamllint)" \
-		shellcheck "$$($(VERSIONS) tools.shellcheck)"
+		shellcheck "$$($(VERSIONS) tools.shellcheck)" \
+		zizmor     "$$($(VERSIONS) tools.zizmor)"
 
 .PHONY: clean
 clean: ## Remove installed tools

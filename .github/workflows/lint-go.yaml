@@ -81,21 +81,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout the lint definition
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .builder
-          persist-credentials: false
-
       - name: Load pinned versions
         id: versions
-        uses: ./.builder/.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       - name: Setup Go
         id: go
-        uses: ./.builder/.github/actions/setup-go
+        uses: $/.github/actions/setup-go
         with:
           go_version: ${{ inputs.go_version }}
           go_version_file: ${{ inputs.go_version_file }}

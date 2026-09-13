@@ -47,7 +47,7 @@ jobs:
 
       - name: Load pinned versions
         id: versions
-        uses: ./.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       - name: Install actionlint
         run: ./scripts/install-tool.sh actionlint "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}/bin"
@@ -99,10 +99,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Load pinned versions
+        id: versions
+        uses: $/.github/actions/load-versions
+
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
         with:
           advanced-security: true
+          # Never `latest`, which is this action's default. See .versions.yaml.
+          version: ${{ steps.versions.outputs.zizmor }}
 
   # A Go fixture that does not compile would fail the selftest with a confusing
   # ko error. Catching it here costs seconds and names the real problem.

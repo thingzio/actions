@@ -44,7 +44,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: ./.github/workflows/build-ko.yaml
+    uses: $/.github/workflows/build-ko.yaml
     with:
       image: thingzio/actions-selftest-ko
       working_directory: testdata/go-app
@@ -62,7 +62,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: ./.github/workflows/build-docker.yaml
+    uses: $/.github/workflows/build-docker.yaml
     with:
       image: thingzio/actions-selftest-docker
       context: testdata/docker-app
@@ -83,7 +83,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: ./.github/workflows/build-docker.yaml
+    uses: $/.github/workflows/build-docker.yaml
     with:
       image: thingzio/actions-selftest-docker-amd64
       context: testdata/docker-app
@@ -105,7 +105,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: ./.github/workflows/codeql-go.yaml
+    uses: $/.github/workflows/codeql-go.yaml
     with:
       working_directory: testdata/go-app
 
@@ -116,7 +116,7 @@ jobs:
     name: terraform-scan
     permissions:
       contents: read
-    uses: ./.github/workflows/terraform-scan.yaml
+    uses: $/.github/workflows/terraform-scan.yaml
     with:
       working_directory: testdata/terraform
 
@@ -127,7 +127,7 @@ jobs:
     name: lint-go
     permissions:
       contents: read
-    uses: ./.github/workflows/lint-go.yaml
+    uses: $/.github/workflows/lint-go.yaml
     with:
       working_directory: testdata/go-app
 
@@ -168,7 +168,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: ./.github/workflows/release-go.yaml
+    uses: $/.github/workflows/release-go.yaml
     with:
       working_directory: testdata/go-app
       dry_run: true
@@ -214,20 +214,20 @@ jobs:
 
       - name: Load pinned versions
         id: versions
-        uses: ./.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       - name: Setup build tools
-        uses: ./.github/actions/setup-build-tools
+        uses: $/.github/actions/setup-build-tools
         with:
           cosign: ${{ steps.versions.outputs.cosign }}
 
       - name: Authenticate to the registry
-        uses: ./.github/actions/registry-login
+        uses: $/.github/actions/registry-login
 
       # The verification contract published in the README, executed. If this
       # fails, the documentation is wrong and consumers would find out instead.
       - name: Verify
-        uses: ./.github/actions/verify-image
+        uses: $/.github/actions/verify-image
         with:
           image_ref: ${{ matrix.image_ref }}
           signer_repo: ${{ github.repository }}
@@ -252,7 +252,7 @@ jobs:
           persist-credentials: false
 
       - name: Authenticate to the registry
-        uses: ./.github/actions/registry-login
+        uses: $/.github/actions/registry-login
 
       - name: Run the ko image
         env:

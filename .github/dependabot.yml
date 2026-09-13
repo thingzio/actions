@@ -1,10 +1,24 @@
 version: 2
 
+# Every entry below carries a 7-day cooldown. Pinning by SHA proves that what
+# runs is what was reviewed; it does not prove the thing reviewed was honest.
+# The action compromises that actually happen -- tj-actions/changed-files is the
+# canonical one -- are published, exploited, and yanked inside a few days, and a
+# same-day Dependabot PR is how a repository volunteers to pin the bad commit.
+# Waiting a week costs nothing here (nothing in this repository is a security
+# patch that cannot wait) and puts every bump on the far side of the window in
+# which those compromises get found.
+#
+# Only `default-days` is set. The semver-specific keys are unsupported by the
+# github-actions and docker ecosystems, and splitting the gomod entry alone
+# would buy asymmetry without buying safety.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -20,6 +34,8 @@ updates:
     directory: .github/actions/registry-login
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -28,6 +44,8 @@ updates:
     directory: .github/actions/setup-build-tools
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -36,6 +54,8 @@ updates:
     directory: .github/actions/sbom-attest
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -47,6 +67,8 @@ updates:
     directory: testdata/go-app
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       go:
         patterns: ["*"]
@@ -57,6 +79,8 @@ updates:
     directory: testdata/docker-app
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       docker:
         patterns: ["*"]

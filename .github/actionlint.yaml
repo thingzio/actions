@@ -15,11 +15,29 @@ paths:
     ignore:
       # `job.workflow_repository` and `job.workflow_sha` are documented GitHub
       # context properties -- they are how a reusable workflow checks out its
-      # own repository at its own commit, which this repository depends on
-      # because a relative `uses: ./...` inside a reusable workflow resolves
-      # against the caller's checkout instead. actionlint's type model for the
-      # `job` context predates them, so it reports a false positive.
+      # own repository at its own commit, which this repository depends on to
+      # put scripts/ on disk for its `run:` blocks. (Its composite actions are
+      # reached with `uses: $/...` and need no checkout; a relative `./...`
+      # would resolve against the caller's checkout instead.) actionlint's type
+      # model for the `job` context predates them, so it reports a false
+      # positive.
       #
       # Remove these two lines once actionlint ships the updated context type.
       - 'property "workflow_repository" is not defined in object type'
       - 'property "workflow_sha" is not defined in object type'
+
+      # GitHub's self-repository `uses:` syntax, GA on 2026-07-30: `$/<path>`
+      # resolves to the repository owning the workflow, at the commit that is
+      # running. actionlint's newest release (v1.7.12, March 2026) predates it
+      # and reads `$/...` as a malformed action reference. rhysd/actionlint#711
+      # and #732 track support.
+      #
+      # Both patterns are anchored on the literal `$/` prefix, so they suppress
+      # exactly this syntax and nothing else: an unpinned `actions/checkout@v4`
+      # or a genuinely malformed `uses:` produces a message that does not begin
+      # with `$/` and still fails the build, which is the point -- SHA pinning
+      # is the property this repository exists to hold.
+      #
+      # Remove these two lines once actionlint understands `$/`.
+      - 'specifying action "\$/'
+      - 'reusable workflow call "\$/'

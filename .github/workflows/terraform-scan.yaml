@@ -85,7 +85,7 @@ jobs:
 
       - name: Load pinned versions
         id: versions
-        uses: ./.builder/.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       - name: Install Trivy
         env:

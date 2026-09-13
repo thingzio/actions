@@ -19,6 +19,7 @@ tools.golangci_lint
 tools.actionlint
 tools.yamllint
 tools.shellcheck
+tools.zizmor
 images.ko_default_base
 "
 

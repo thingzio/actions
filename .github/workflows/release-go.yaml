@@ -158,10 +158,11 @@ jobs:
       syft: ${{ inputs.syft_version != '' && inputs.syft_version || steps.versions.outputs.syft }}
       cosign: ${{ inputs.cosign_version != '' && inputs.cosign_version || steps.versions.outputs.cosign }}
     steps:
-      # The build definition checks itself out. Inside a reusable workflow a
-      # relative `uses: ./...` resolves against the CALLER's checkout, so the
-      # only way to reach this repository's own actions and scripts is to fetch
-      # them explicitly at the commit that is running.
+      # The build definition checks itself out for its scripts/. Its actions
+      # come from `uses: $/...`, which the runner resolves to this repository at
+      # the commit of the workflow file that defines this job; `$/` has no
+      # equivalent for a `run:` block, which is what this checkout is for.
+      # `./...` would reach the CALLER's checkout in both cases, not this one.
       - name: Checkout the build definition
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -172,7 +173,7 @@ jobs:
 
       - name: Load pinned versions
         id: versions
-        uses: ./.builder/.github/actions/load-versions
+        uses: $/.github/actions/load-versions
 
       # A ref is caller-influenced input like any other. A release built from a
       # branch would publish provenance naming a ref that moves, so a verifier
@@ -248,7 +249,7 @@ jobs:
           echo "excluded /.builder/ from the caller's working tree"
 
       - name: Setup Go
-        uses: ./.builder/.github/actions/setup-go
+        uses: $/.github/actions/setup-go
         with:
           go_version: ${{ inputs.go_version }}
           go_version_file: ${{ inputs.go_version_file }}

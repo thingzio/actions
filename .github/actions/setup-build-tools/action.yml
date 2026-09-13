@@ -34,9 +34,16 @@ inputs:
 runs:
   using: composite
   steps:
+    # zizmor flags every GITHUB_PATH write, because the usual shape of that bug
+    # is a path assembled from caller input: control one component and you
+    # prepend a directory of your own to PATH, and the next `cosign` on the line
+    # is yours. Nothing here is caller-derived. The string is RUNNER_TEMP -- set
+    # by the runner, not reachable from any workflow input -- with a constant
+    # suffix, so there is no component an attacker could steer. Keep it that way:
+    # if this path ever interpolates an input, the suppression must come off.
     - name: Prepare the tool directory
       shell: bash
-      run: |
+      run: | # zizmor: ignore[github-env] path is RUNNER_TEMP plus a constant, never caller input
         set -euo pipefail
         mkdir -p "${RUNNER_TEMP}/thingz-bin"
         printf '%s\n' "${RUNNER_TEMP}/thingz-bin" >>"${GITHUB_PATH}"
