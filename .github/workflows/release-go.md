@@ -72,11 +72,18 @@ which is the mutable-builder problem Level 3 exists to exclude. See
 
 ## What a caller must change
 
-Every requirement below is checked by `scripts/check-goreleaser-config.sh`
-before goreleaser is allowed to run, and the build fails naming the one that is
-missing. They are all things that otherwise fail silently — green CI, a release
-that looks right, and a property lost that only the person trusting it finds
-out about.
+The first three are checked by `scripts/check-goreleaser-config.sh` before
+goreleaser is allowed to run, and the build fails naming the one that is
+missing. The checksum requirement is enforced afterwards, by the step that
+stages the file for attestation, because it is a question about what goreleaser
+produced rather than about what the configuration says. The `sboms:` block is
+advisory — the same script warns when it is absent rather than failing, because
+a caller may legitimately not want SBOMs. The Homebrew guard is checked by
+nothing.
+
+They are all things that otherwise fail silently — green CI, a release that
+looks right, and a property lost that only the person trusting it finds out
+about.
 
 **Set `release.draft: true`.** The release is created by `build` and signed by
 `attest`, so without this there is a live, publicly downloadable release with no
@@ -124,12 +131,13 @@ against the same script, so it cannot drift from this list.
 | Input | Default | Description |
 |---|---|---|
 | `go_version` | `''` | Explicit Go version. Empty reads `go_version_file`. |
-| `go_version_file` | `.go-version` | File the Go version is read from. |
+| `go_version_file` | `go.mod` | File the Go version is read from, relative to `working_directory`. |
 | `working_directory` | `.` | Directory holding `go.mod` and `.goreleaser.yaml`. |
 | `goreleaser_version` | `''` | Override the pinned goreleaser version. |
 | `syft_version` | `''` | Override the pinned syft version. |
 | `cosign_version` | `''` | Override the pinned cosign version. |
 | `dry_run` | `false` | Snapshot build; signs, attests and publishes nothing. |
+| `publish` | `true` | Publish the release once signed. False leaves it a draft. |
 
 There is deliberately no `args` input. Arbitrary goreleaser flags would be
 caller-supplied shell in the build definition, which is the hole the three-job
@@ -157,7 +165,48 @@ them on a dry run.
 floating tag. goreleaser decides its own prerelease behaviour from
 `prerelease: auto`, and this output does not feed it.
 
-## When something fails partway
+## Deferring publication
+
+By default the release goes public as soon as its signature and provenance
+exist. A caller that has something else to check first — a deployment that must
+roll out, a smoke test against it — sets `publish: false` and flips the draft
+itself:
+
+```yaml
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: thingzio/actions/.github/workflows/release-go.yaml@<commit-sha>  # v1.7.0
+    with:
+      publish: false
+
+  deploy:
+    needs: release
+    # ...
+
+  publish:
+    needs: [release, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false
+```
+
+This weakens nothing. The artifacts are signed, verified and attested before
+the workflow hands back either way; a draft is simply unreachable until someone
+publishes it, which is the safer end of the trade. What it does move is the
+responsibility: **nothing in this workflow will publish the release later.** A
+caller that sets `publish: false` and whose gating job never succeeds has a
+release no one can download, and no error anywhere saying so. Gate on something
+that fails loudly.
 
 The jobs are ordered so that the expensive, caller-controlled work happens
 before anything becomes visible, which means a failure usually leaves a draft

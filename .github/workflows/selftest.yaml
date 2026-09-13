@@ -152,6 +152,11 @@ jobs:
   # entirely here, so nothing mints an OIDC token -- and job-level permissions
   # in a called workflow replace the caller's rather than adding to them, so the
   # build job still receives contents: write and nothing else.
+  # go_version_file is deliberately not set: the fixture carries a go.mod and
+  # no .go-version, so leaving it out exercises the default. It used to be
+  # passed explicitly, which meant the default was the one input nothing here
+  # ever ran -- and it was wrong, naming a file no repository in the
+  # organization has.
   release-go:
     name: release-go
     permissions:
@@ -161,7 +166,6 @@ jobs:
     uses: ./.github/workflows/release-go.yaml
     with:
       working_directory: testdata/go-app
-      go_version_file: go.mod
       dry_run: true
 
   verify:
