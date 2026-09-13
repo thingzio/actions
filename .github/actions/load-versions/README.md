@@ -26,10 +26,14 @@ selftest proves before it merges.
 | `ko` | `v0.19.1` |
 | `crane` | `v0.22.1` |
 | `syft` | `v1.51.1` |
+| `goreleaser` | `v2.18.1` |
 | `cosign` | `v3.1.3` — pinned `>= v3.1.0` so DSSE attestations reach Rekor v2 as `hashedrekord`/PAE rather than the legacy `dsse` entry type, which `sigstore-go` cannot verify |
+| `trivy` | `v0.74.0` |
+| `golangci_lint` | `v2.13.1` |
 | `actionlint` | `v1.7.12` |
 | `yamllint` | `1.38.0` |
 | `shellcheck` | `v0.11.0` |
+| `zizmor` | `1.30.1` — unprefixed, because `pip` and the `zizmor` container tag both want it that way |
 | `ko_default_base` | `cgr.dev/chainguard/static:latest` |
 
 ## Notes
