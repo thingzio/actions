@@ -70,6 +70,18 @@ jobs:
 which is the mutable-builder problem Level 3 exists to exclude. See
 [SLSA](../../docs/slsa.md).
 
+**A repository whose toolchain lives in `.go-version` rather than `go.mod`** —
+which is the convention in `devproof` and `devradarctl` — has to say so, the
+same way it does for [`codeql-go`](codeql-go.md). The default is `go.mod`
+because every Go workflow here defaults to `go.mod`, not because `.go-version`
+is unusual:
+
+```yaml
+    uses: thingzio/actions/.github/workflows/release-go.yaml@<commit-sha>  # v1.7.1
+    with:
+      go_version_file: .go-version
+```
+
 ## What a caller must change
 
 The first three are checked by `scripts/check-goreleaser-config.sh` before

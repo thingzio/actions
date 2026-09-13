@@ -154,9 +154,14 @@ jobs:
   # build job still receives contents: write and nothing else.
   # go_version_file is deliberately not set: the fixture carries a go.mod and
   # no .go-version, so leaving it out exercises the default. It used to be
-  # passed explicitly, which meant the default was the one input nothing here
-  # ever ran -- and it was wrong, naming a file no repository in the
-  # organization has.
+  # passed explicitly, which left the default as the one input nothing here
+  # ever ran.
+  #
+  # The default is go.mod because every other Go workflow here defaults to
+  # go.mod. It is NOT because .go-version is unused -- devproof and devradarctl
+  # both keep one, deliberately, and both pass go_version_file: .go-version.
+  # An earlier version of this comment claimed no repository in the
+  # organization had that file, which was simply wrong.
   release-go:
     name: release-go
     permissions:
