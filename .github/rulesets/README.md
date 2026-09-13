@@ -34,14 +34,14 @@ Protects the default branch.
 
 | Rule | Reason |
 |---|---|
-| `pull_request` | Nothing reaches `main` by direct push, so every change is a reviewable diff with checks attached. |
+| `pull_request` | Every change is a reviewable diff with checks attached — except for the bypass actors below. |
 | `dismiss_stale_reviews_on_push` | An approval applies to the reviewed commits, not to whatever is pushed afterwards. |
 | `required_review_thread_resolution` | An unresolved review comment is unfinished business, not a merge conflict to route around. |
 | `required_signatures` | Commit authorship is verifiable, which is the bar `RELEASING.md` also holds tags to. |
 | `required_linear_history` + squash-only | `main` stays bisectable. A release must be attributable to one commit. |
 | `required_status_checks` with `strict` | `ci` and `selftest` must pass **on the merged result**, not on a stale base. The selftest is the only evidence these workflows actually build and attest. |
 | `deletion`, `non_fast_forward` | The branch other repositories pin against cannot be rewritten. |
-| Empty `bypass_actors` | Including for the maintainer. A bypass that exists is a bypass that gets used at 2am. |
+| `bypass_actors`: org owners | A deliberate exception, not a default. See below. |
 
 ### The approval count is 0, on purpose
 
@@ -55,14 +55,30 @@ GitHub does not permit self-approval. This is a single-maintainer project (see
 nothing — until a second maintainer exists. A repository that cannot take a
 security patch is not the stricter configuration.
 
-What still holds with 0 approvals: no direct pushes, all nine status checks
-green on the merged result, linear history, signed commits, no force-push, no
-deletion, and no bypass for anyone. The enforcement lives in the checks, which
-no human can wave through.
+What still holds with 0 approvals: all nine status checks green on the merged
+result, linear history, signed commits, no force-push, and no deletion.
 
 Flip all three on the day [MAINTAINERS.md](../../MAINTAINERS.md) gains a second
-row. Until then a stricter-looking number would buy a permanent bypass actor,
-which is genuinely weaker.
+row.
+
+### `OrganizationAdmin` can bypass, and what that costs
+
+Org owners hold `bypass_mode: always`, so they can push straight to `main`
+without a pull request and without the nine checks.
+
+Be clear about what this gives up. The previous configuration had an empty
+`bypass_actors` on the argument that a bypass which exists is a bypass that gets
+used at 2am, and that argument was not wrong — it is simply no longer the
+configuration. The checks are now a strong default rather than something no
+human can wave through, and `main` can receive a commit that `ci` and `selftest`
+never saw. Since `selftest` is the only evidence that these workflows really
+build and attest an image, a bypassed push is a commit with no such evidence,
+and other repositories pin against this branch.
+
+So: use the pull request path. The bypass is for the case where the ruleset
+itself is what is broken — a renamed job whose status check can never report,
+leaving no way to merge the fix that renames it back. Reaching for it otherwise
+converts every guarantee in the table above into a convention.
 
 Status check contexts are the **job names** from `ci.yaml`, `selftest.yaml` and
 `codeql.yaml`. Renaming a job silently disables its gate — a job that never
