@@ -221,6 +221,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Into the caller's working tree, which is where a local `uses:` has to
+      # resolve from. build-ko and build-docker avoid the nesting by checking
+      # the caller out into src/ instead; this job cannot, because it reaches
+      # the setup-go composite, and that composite assumes the module is at the
+      # workspace root.
       - name: Checkout the build definition
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -228,6 +233,19 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .builder
           persist-credentials: false
+
+      # So goreleaser does not see it. It refuses to release from a dirty tree,
+      # and .builder/ is an untracked directory this workflow put inside the
+      # caller's checkout -- the caller has nothing to fix and no way to know.
+      #
+      # .git/info/exclude rather than .gitignore, because .gitignore is a
+      # tracked file: editing it is itself a modification, which is the very
+      # state being avoided.
+      - name: Hide the build definition from the caller's git
+        run: |
+          set -euo pipefail
+          printf '/.builder/\n' >> .git/info/exclude
+          echo "excluded /.builder/ from the caller's working tree"
 
       - name: Setup Go
         uses: ./.builder/.github/actions/setup-go
@@ -254,6 +272,26 @@ jobs:
         env:
           WORKING_DIRECTORY: ${{ inputs.working_directory }}
         run: .builder/scripts/check-goreleaser-config.sh "${WORKING_DIRECTORY}"
+
+      # goreleaser refuses to release from a dirty tree, but only for a real
+      # release: --snapshot skips the check. The selftest is always a dry run,
+      # so without this step nothing here can catch a workflow change that
+      # dirties the caller's checkout -- and nothing did. Checking out the build
+      # definition into .builder/ broke every non-snapshot release from the day
+      # release-go shipped until a caller found it.
+      #
+      # Asserted on every run, dry or not, because the point is to fail in the
+      # selftest rather than in somebody's release.
+      - name: Assert the working tree is clean
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain)"
+          if [ -n "${dirty}" ]; then
+            echo "::error::working tree is dirty before goreleaser ran; a real release would fail here"
+            printf '%s\n' "${dirty}"
+            exit 1
+          fi
+          echo "working tree is clean"
 
       # --skip=sign because signing belongs to the attest job, where the caller
       # cannot reach the key. A caller's signs block would otherwise run cosign
