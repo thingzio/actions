@@ -66,10 +66,12 @@ on:
         required: false
         default: ""
       go_version_file:
-        description: File to read the Go version from.
+        description: >-
+          File the Go version is read from, relative to working_directory.
+          Ignored when go_version is set.
         type: string
         required: false
-        default: .go-version
+        default: go.mod
       working_directory:
         description: Directory holding go.mod and .goreleaser.yaml.
         type: string
@@ -104,6 +106,21 @@ on:
         type: boolean
         required: false
         default: false
+      publish:
+        description: >-
+          Publish the release once its signature and provenance exist. Set
+          false to leave it a draft, for a caller that gates publication on
+          something this workflow cannot see -- a deployment, a smoke test.
+
+          Deferring is strictly safer than the default rather than a weakening
+          of it: the evidence is attached either way, and a draft is
+          unreachable until someone flips it. What changes is who is
+          responsible for the flip. Nothing here will do it later, so a caller
+          that sets this false and never publishes has a release no one can
+          download.
+        type: boolean
+        required: false
+        default: true
     secrets:
       homebrew_deploy_key:
         description: >-
@@ -433,7 +450,7 @@ jobs:
   publish:
     name: Publish
     needs: [prepare, attest]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !inputs.dry_run && inputs.publish }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -443,6 +460,10 @@ jobs:
       # the release has been invisible since it was created and every artifact
       # on it has now been signed, verified and attested. This is the step that
       # makes it visible, and the first point at which anyone can download it.
+      #
+      # Skipped entirely when publish is false. The release is then finished in
+      # every sense that matters here -- signed, verified, attested -- and left
+      # as a draft for the caller to publish after whatever it is gating on.
       #
       # gh is whatever the runner image ships. It is load-bearing here and in
       # the attest job because addressing a draft release by tag needs the
